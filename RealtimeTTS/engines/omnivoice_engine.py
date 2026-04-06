@@ -243,9 +243,10 @@ class OmniVoiceEngine(BaseEngine):
 
         if self.debug:
             print(f"\n{COLOR_CYAN}Synthesizing Text:{COLOR_RESET} {text}")
+            print(f" ├─ {COLOR_YELLOW}Voice:{COLOR_RESET} {self.current_voice.name}")
             print(f" ├─ {COLOR_YELLOW}Language:{COLOR_RESET} {self.current_voice.language}")
             print(f" ├─ {COLOR_YELLOW}Steps:{COLOR_RESET} {current_num_steps}")
-            print(f" └─ {COLOR_YELLOW}Schedule:{COLOR_RESET} {self.num_steps_schedule}")
+            print(f" ├─ {COLOR_YELLOW}Schedule:{COLOR_RESET} {self.num_steps_schedule}")
 
         start_time = time.time()
 
