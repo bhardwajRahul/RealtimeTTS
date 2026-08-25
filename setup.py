@@ -91,7 +91,7 @@ all_requirements = list(requirements.values())
 
 # Define base requirements (using .get() to prevent KeyErrors if missing from requirements.txt)
 base_requirements =[
-    requirements.get("stream2sentence", "stream2sentence[nltk]>=1.0.3"),
+    requirements.get("stream2sentence", "stream2sentence[nltk]>=1.0.4"),
     requirements.get("pydub", "pydub"),
     requirements.get(
         "audioop-lts",
@@ -99,7 +99,7 @@ base_requirements =[
     ),
     requirements.get("resampy", "resampy"),
 ]
-stanza_tokenizer_requirements = ["stream2sentence[stanza]>=1.0.3"]
+stanza_tokenizer_requirements = ["stream2sentence[stanza]>=1.0.4"]
 pyaudio_requirements = [requirements.get("pyaudio", "pyaudio>=0.2.14")]
 standard_requirements = base_requirements + pyaudio_requirements
 

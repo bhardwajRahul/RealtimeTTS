@@ -48,6 +48,75 @@ class QwenEngineError(RuntimeError):
     """An actionable error raised by the native Qwen engine."""
 
 
+class _PauseableCancelEvent:
+    """Event-compatible native control with acknowledged pause checkpoints.
+
+    ``qwentts_cpp`` calls :meth:`is_set` from its native synthesis thread.  A
+    requested pause deliberately blocks that callback until resume or cancel,
+    so the acknowledgement means native generation has actually reached a
+    quiescent checkpoint instead of merely buffering audio elsewhere.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._cancelled = False
+        self._pause_requested = False
+        self._pause_generation = 0
+        self._acknowledged_generation = 0
+
+    def cancelled(self) -> bool:
+        with self._condition:
+            return self._cancelled
+
+    def is_set(self) -> bool:
+        with self._condition:
+            while self._pause_requested and not self._cancelled:
+                self._acknowledged_generation = self._pause_generation
+                self._condition.notify_all()
+                self._condition.wait()
+            return self._cancelled
+
+    def set(self) -> None:
+        with self._condition:
+            self._cancelled = True
+            self._pause_requested = False
+            self._condition.notify_all()
+
+    def request_pause(self) -> Optional[int]:
+        with self._condition:
+            if self._cancelled:
+                return None
+            if not self._pause_requested:
+                self._pause_requested = True
+                self._pause_generation += 1
+            self._condition.notify_all()
+            return self._pause_generation
+
+    def pause(self, timeout: Optional[float] = None) -> bool:
+        generation = self.request_pause()
+        if generation is None:
+            return False
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        with self._condition:
+            while (
+                self._acknowledged_generation < generation
+                and not self._cancelled
+            ):
+                if deadline is None:
+                    self._condition.wait()
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    return False
+                self._condition.wait(remaining)
+            return self._acknowledged_generation >= generation
+
+    def resume(self) -> None:
+        with self._condition:
+            self._pause_requested = False
+            self._condition.notify_all()
+
+
 @dataclass
 class QwenVoice:
     """Voice-cloning input for :class:`QwenEngine`.
@@ -293,6 +362,8 @@ class QwenEngine(BaseEngine):
         self._prepared_voice_refs: dict[str, Any] = {}
         self._warmed_voice_keys: set[str] = set()
         self._synthesis_lock = threading.RLock()
+        self._control_condition = threading.Condition()
+        self._pause_requested = False
         self._active_cancel_event: Optional[threading.Event] = None
         self._shutdown = False
         self.last_error: Optional[BaseException] = None
@@ -347,19 +418,19 @@ class QwenEngine(BaseEngine):
             import qwentts_cpp
         except ImportError as exc:
             raise ImportError(
-                "QwenEngine requires the native realtimetts-qwen-native wheel. "
+                "QwenEngine requires the native qwentts-cpp-python wheel. "
                 "Install it with: pip install \"realtimetts[qwen]\""
             ) from exc
         abi = int(getattr(qwentts_cpp, "QT_ABI_VERSION", 0))
         if abi != REQUIRED_QWENTTS_ABI:
             raise QwenEngineError(
-                f"realtimetts-qwen-native exposes ABI {abi}; ABI {REQUIRED_QWENTTS_ABI} "
+                f"qwentts-cpp-python exposes ABI {abi}; ABI {REQUIRED_QWENTTS_ABI} "
                 "is required. Install the pinned realtimetts[qwen] dependencies."
             )
         version = getattr(qwentts_cpp, "__version__", None)
         if version is None:
             try:
-                version = importlib.metadata.version("realtimetts-qwen-native")
+                version = importlib.metadata.version("qwentts-cpp-python")
             except importlib.metadata.PackageNotFoundError:
                 version = "unknown"
         if self.talker_path and self.codec_path:
@@ -396,7 +467,7 @@ class QwenEngine(BaseEngine):
             detail = "not enough GPU VRAM; close other GPU workloads or use a smaller quantization"
         elif "abi" in lowered or "version mismatch" in lowered:
             detail = (
-                "native ABI mismatch; reinstall matching RealtimeTTS and realtimetts-qwen-native wheels, "
+                "native ABI mismatch; reinstall matching RealtimeTTS and qwentts-cpp-python wheels, "
                 "then run `python -m qwentts_cpp doctor`"
             )
         elif any(token in lowered for token in ("dll", "shared libr", "libqwen", "could not find")):
@@ -572,7 +643,9 @@ class QwenEngine(BaseEngine):
             if self._voice_cache_key in self._warmed_voice_keys:
                 return
             cancel_event = threading.Event()
-            self._active_cancel_event = cancel_event
+            with self._control_condition:
+                self._active_cancel_event = cancel_event
+                self._control_condition.notify_all()
             try:
                 for _chunk, sample_rate in self._backend.stream(
                     **self._stream_kwargs(
@@ -593,8 +666,10 @@ class QwenEngine(BaseEngine):
                     raise self._translate_error(exc, "warming the native model") from exc
             finally:
                 cancel_event.set()
-                if self._active_cancel_event is cancel_event:
-                    self._active_cancel_event = None
+                with self._control_condition:
+                    if self._active_cancel_event is cancel_event:
+                        self._active_cancel_event = None
+                    self._control_condition.notify_all()
 
     def get_stream_info(self) -> Tuple[int, int, int]:
         from .._audio_backend import pyaudio
@@ -607,7 +682,7 @@ class QwenEngine(BaseEngine):
             self.last_error = ValueError("QwenEngine text must not be empty")
             return False
         started_ns = time.perf_counter_ns()
-        cancel_event = threading.Event()
+        cancel_event = _PauseableCancelEvent()
         with self._synthesis_lock:
             if self._shutdown or self._backend is None:
                 self.last_error = QwenEngineError("QwenEngine is shut down")
@@ -615,7 +690,11 @@ class QwenEngine(BaseEngine):
             if self.current_voice is None or self._voice_ref is None:
                 self.last_error = QwenEngineError("Set a QwenVoice before synthesis")
                 return False
-            self._active_cancel_event = cancel_event
+            with self._control_condition:
+                self._active_cancel_event = cancel_event
+                if self._pause_requested:
+                    cancel_event.request_pause()
+                self._control_condition.notify_all()
             self.last_error = None
             first_queue_ns: Optional[int] = None
             n_samples = 0
@@ -722,7 +801,7 @@ class QwenEngine(BaseEngine):
                     **self._stream_kwargs(text.strip(), self.current_voice, cancel_event=cancel_event)
                 )
                 for chunk, sample_rate in stream:
-                    if self.stop_synthesis_event.is_set() or cancel_event.is_set():
+                    if self.stop_synthesis_event.is_set() or cancel_event.cancelled():
                         cancel_event.set()
                         break
                     if int(sample_rate) != SAMPLE_RATE:
@@ -757,14 +836,14 @@ class QwenEngine(BaseEngine):
                     self.trim_silence
                     and self._trim_silence_start_pending
                     and search_remainder.size
-                    and not (cancel_event.is_set() or self.stop_synthesis_event.is_set())
+                    and not (cancel_event.cancelled() or self.stop_synthesis_event.is_set())
                 ):
                     detected = detect_start(np.empty(0, dtype=np.float32), final=True)
                     if detected is not None:
                         self._trim_silence_start_pending = False
                         buffer_or_publish(detected)
                 if startup_audio and not (
-                    cancel_event.is_set() or self.stop_synthesis_event.is_set()
+                    cancel_event.cancelled() or self.stop_synthesis_event.is_set()
                 ):
                     publish_audio(np.concatenate(startup_audio))
                     startup_audio.clear()
@@ -778,7 +857,7 @@ class QwenEngine(BaseEngine):
                 ]
                 self.audio_duration += n_samples / SAMPLE_RATE
                 self.last_synthesis_profile = {
-                    "cancelled": cancel_event.is_set() or self.stop_synthesis_event.is_set(),
+                    "cancelled": cancel_event.cancelled() or self.stop_synthesis_event.is_set(),
                     "n_samples": n_samples,
                     "leading_trimmed_samples": leading_trimmed_samples,
                     "leading_trimmed_ms": leading_trimmed_samples * 1000 / SAMPLE_RATE,
@@ -818,12 +897,12 @@ class QwenEngine(BaseEngine):
                             - float(callback_profile["first_callback_enter_ms"])
                         )
                 if n_samples == 0 and not (
-                    cancel_event.is_set() or self.stop_synthesis_event.is_set()
+                    cancel_event.cancelled() or self.stop_synthesis_event.is_set()
                 ):
                     raise QwenEngineError("qwentts.cpp completed without producing audio")
                 return True
             except BaseException as exc:
-                if cancel_event.is_set() or self.stop_synthesis_event.is_set():
+                if cancel_event.cancelled() or self.stop_synthesis_event.is_set():
                     return True
                 self.last_error = self._translate_error(exc, "streaming synthesis")
                 logging.exception("QwenEngine synthesis failed: %s", self.last_error)
@@ -835,7 +914,10 @@ class QwenEngine(BaseEngine):
                         stream.close()
                     except Exception:
                         logging.debug("Failed to close cancelled qwentts stream", exc_info=True)
-                self._active_cancel_event = None
+                with self._control_condition:
+                    if self._active_cancel_event is cancel_event:
+                        self._active_cancel_event = None
+                    self._control_condition.notify_all()
 
     def get_voices(self) -> list[QwenVoice]:
         return []
@@ -883,9 +965,40 @@ class QwenEngine(BaseEngine):
             for name, value in voice_parameters.items():
                 setattr(self, name, value)
 
+    def pause(self, timeout: Optional[float] = 1.0) -> bool:
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        with self._control_condition:
+            self._pause_requested = True
+            active = self._active_cancel_event
+            while active is None and not self._shutdown:
+                if deadline is None:
+                    self._control_condition.wait()
+                else:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.0:
+                        return False
+                    self._control_condition.wait(remaining)
+                active = self._active_cancel_event
+        pause = getattr(active, "pause", None)
+        if not callable(pause):
+            return False
+        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        return bool(pause(timeout=remaining))
+
+    def resume(self) -> None:
+        with self._control_condition:
+            self._pause_requested = False
+            active = self._active_cancel_event
+            self._control_condition.notify_all()
+        resume = getattr(active, "resume", None)
+        if callable(resume):
+            resume()
+
     def stop(self) -> None:
         super().stop()
-        active = self._active_cancel_event
+        with self._control_condition:
+            active = self._active_cancel_event
+            self._control_condition.notify_all()
         if active is not None:
             active.set()
 

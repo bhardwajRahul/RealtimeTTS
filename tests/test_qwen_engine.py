@@ -487,6 +487,64 @@ def test_stop_signals_native_cancel_and_context_is_reusable(tmp_path, monkeypatc
     assert engine.synthesize("after close") is False
 
 
+def test_pause_resume_quiesces_native_checkpoints_under_stress(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        qwen_module,
+        "_load_reference_audio",
+        lambda _path: np.array([0.0, 0.1], dtype=np.float32),
+    )
+    backend = FakeBackend(endless=True)
+    engine = _engine(
+        tmp_path,
+        backend,
+        voice=QwenVoice("voice", ref_audio=_reference_file(tmp_path)),
+        trim_silence=False,
+        startup_buffer_ms=0,
+    )
+    result = []
+    worker = threading.Thread(target=lambda: result.append(engine.synthesize("long text")))
+    worker.start()
+
+    def wait_for_more_audio(previous_size, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            current_size = engine.queue.qsize()
+            if current_size > previous_size:
+                return current_size
+            time.sleep(0.001)
+        raise AssertionError("native checkpoint did not resume producing audio")
+
+    try:
+        assert backend.stream_entered.wait(timeout=1)
+        produced = wait_for_more_audio(0)
+        assert engine.pause(timeout=1.0) is True
+        paused_size = engine.queue.qsize()
+        assert paused_size >= produced
+        time.sleep(0.02)
+        assert engine.queue.qsize() == paused_size
+
+        for _ in range(50):
+            engine.resume()
+            resumed_size = wait_for_more_audio(paused_size)
+            assert engine.pause(timeout=1.0) is True
+            paused_size = engine.queue.qsize()
+            assert paused_size >= resumed_size
+            time.sleep(0.002)
+            assert engine.queue.qsize() == paused_size
+
+        # Cancellation must wake a native callback that is blocked in pause.
+        engine.stop()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert backend.cancel_observed.wait(timeout=1)
+        assert result == [True]
+    finally:
+        engine.resume()
+        engine.stop()
+        worker.join(timeout=2)
+        engine.shutdown()
+
+
 def test_concurrent_syntheses_are_serialized_per_context(tmp_path, monkeypatch):
     monkeypatch.setattr(
         qwen_module,

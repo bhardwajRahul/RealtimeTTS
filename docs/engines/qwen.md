@@ -345,6 +345,11 @@ that has not yet formed a complete segment cannot affect that in-flight native
 request. This is the same frame-by-frame callback path described in the
 upstream [qwentts.cpp architecture notes](https://github.com/ServeurpersoCom/qwentts.cpp/blob/master/docs/ARCHITECTURE.md).
 
+`TextToAudioStream.play()` and `play_async()` accept
+`fragment_lookahead_words=0`. The opt-in setting is passed to
+stream2sentence 1.0.4 or newer; for example, a value of `8` lets the splitter
+prefer a nearby sentence boundary before falling back to a comma fragment.
+
 ## HTTP server
 
 The server uses the same model, codec, voice latents, sampling controls, and
@@ -479,7 +484,10 @@ the single model context permits one active synthesis request at a time.
 The WebSocket stream starts with a JSON `config` event containing a registered
 `voice` and optional `language`, `instructions`, sampling fields, and
 `response_format: "pcm"`. Send JSON `text` events as text arrives, then one
-`end` event; send `cancel` to stop the current request. The server emits
+`end` event; send `pause` and wait for the server's `paused` acknowledgement
+before treating native synthesis as quiescent. Send `resume` and wait for
+`resumed`, or send `cancel` to stop the current request. Duplicate and rapidly
+alternating pause/resume controls are accepted. The server emits
 `fragment_ready` and `first_pcm_ready` JSON events before binary PCM chunks,
 then a terminal `done`, `cancelled`, or `error` JSON event. Every event carries
 the `session_id` and request-level `request_id` when applicable; readiness and
@@ -505,6 +513,10 @@ the default warmup sentence and 32-token limit with `--startup-warmup-text` and
 `--startup-warmup-tokens`. Add the option on a subsequent launch after the voice
 has been registered; omit it during the initial registration launch or to retain
 lazy startup.
+
+Set `--fragment-lookahead-words 8` to enable the same bounded fragment
+lookahead for WebSocket text streams. Its default is `0`, so existing splitting
+latency and behavior remain unchanged unless the option is selected.
 
 For PCM streaming, the server buffers output until a block reaches an average
 absolute signed-16 amplitude of 80. Leading silence is preserved once speech

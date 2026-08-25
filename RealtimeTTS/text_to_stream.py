@@ -437,6 +437,7 @@ class TextToAudioStream:
         sentence_fragment_delimiters: str = ".?!;:,\n…。",
         force_first_fragment_after_words=30,
         debug=False,
+        fragment_lookahead_words: int = 0,
     ):
         """
         Async handling of text to audio synthesis, see play() method.
@@ -469,6 +470,7 @@ class TextToAudioStream:
                 force_first_fragment_after_words,
                 True,
                 debug,
+                fragment_lookahead_words,
             )
             self.play_thread = threading.Thread(target=self.play, args=args)
             self.play_thread.start()
@@ -502,6 +504,7 @@ class TextToAudioStream:
         force_first_fragment_after_words=30,
         is_external_call=True,
         debug=False,
+        fragment_lookahead_words: int = 0,
     ):
         """
         Handles the synthesis of text to audio.
@@ -658,6 +661,7 @@ class TextToAudioStream:
                     log_characters=self.log_characters,
                     sentence_fragment_delimiters=sentence_fragment_delimiters,
                     force_first_fragment_after_words=force_first_fragment_after_words,
+                    fragment_lookahead_words=fragment_lookahead_words,
                     debug=debug,
                 )
 
@@ -853,6 +857,7 @@ class TextToAudioStream:
                     muted=muted,
                     sentence_fragment_delimiters=sentence_fragment_delimiters,
                     force_first_fragment_after_words=force_first_fragment_after_words,
+                    fragment_lookahead_words=fragment_lookahead_words,
                     is_external_call=False,
                     debug=debug,
                 )

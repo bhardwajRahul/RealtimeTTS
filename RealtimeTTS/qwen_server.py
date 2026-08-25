@@ -67,6 +67,7 @@ AUDIBLE_AVERAGE_ABS_THRESHOLD = 80.0
 DEFAULT_STALL_TIMEOUT_SECONDS = 30.0
 DEFAULT_SYNTHESIS_TIMEOUT_SECONDS = 120.0
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+PAUSE_ACK_TIMEOUT_SECONDS = 2.0
 DEFAULT_MAX_ACTIVE_REQUESTS = 1
 DEFAULT_MAX_QUEUED_REQUESTS = 8
 DEFAULT_OUTPUT_QUEUE_CHUNKS = 128
@@ -500,17 +501,52 @@ class SynthesisState:
         self.error_message: Optional[str] = None
         self.error_status = 502
         self.worker: Optional[threading.Thread] = None
-        self._active_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
+        self._control = threading.Condition()
         self._engine_active = False
+        self._pause_requested = False
 
-    def set_engine_active(self, value: bool) -> None:
-        with self._active_lock:
-            self._engine_active = value
+    def begin_engine(self) -> bool:
+        with self._control:
+            while self._pause_requested and not self.cancelled.is_set():
+                self._control.wait()
+            if self.cancelled.is_set():
+                return False
+            self._engine_active = True
+            return True
+
+    def end_engine(self) -> None:
+        with self._control:
+            self._engine_active = False
+            self._control.notify_all()
 
     def engine_active(self) -> bool:
-        with self._active_lock:
+        with self._control:
             return self._engine_active
+
+    def request_pause(self) -> None:
+        with self._control:
+            self._pause_requested = True
+            self._control.notify_all()
+
+    def request_resume(self) -> None:
+        with self._control:
+            self._pause_requested = False
+            self._control.notify_all()
+
+    def pause_requested(self) -> bool:
+        with self._control:
+            return self._pause_requested
+
+    def wait_until_resumed_or_cancelled(self) -> bool:
+        with self._control:
+            while self._pause_requested and not self.cancelled.is_set():
+                self._control.wait()
+            return not self.cancelled.is_set()
+
+    def wake(self) -> None:
+        with self._control:
+            self._control.notify_all()
 
 
 class _CaptureQueue:
@@ -595,6 +631,7 @@ class QwenHttpServer:
         cors_origins: Optional[Sequence[str]] = None,
         clock: Callable[[], float] = time.monotonic,
         language_router: Optional[QwenLanguageRouter] = None,
+        fragment_lookahead_words: int = 0,
     ) -> None:
         self.engine = engine
         self.alias = str(alias).strip()
@@ -620,6 +657,8 @@ class QwenHttpServer:
             raise ValueError("output_queue_chunks must be positive")
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
+        if fragment_lookahead_words < 0:
+            raise ValueError("fragment_lookahead_words must not be negative")
         self.registry = VoiceRegistry(voice_dir)
         self.metrics = RequestMetrics(stall_timeout_seconds, clock)
         self.language_router = language_router
@@ -629,6 +668,7 @@ class QwenHttpServer:
         self.max_queued_requests = int(max_queued_requests)
         self.output_queue_chunks = int(output_queue_chunks)
         self.max_output_bytes = int(max_output_bytes)
+        self.fragment_lookahead_words = int(fragment_lookahead_words)
         self.api_key = str(api_key) if api_key else None
         configured_origins = DEFAULT_CORS_ORIGINS if cors_origins is None else cors_origins
         self.cors_origins = tuple(str(origin).strip() for origin in configured_origins if str(origin).strip())
@@ -733,6 +773,10 @@ class QwenHttpServer:
                 "speech_stream": "/v1/audio/speech-stream",
                 "capabilities": "/v1/capabilities",
             },
+            "stream_controls": {
+                "input_events": ["pause", "resume", "cancel"],
+                "pause_acknowledgement": "native_checkpoint",
+            },
             "limits": {
                 "max_request_bytes": MAX_REQUEST_BYTES,
                 "max_stream_event_bytes": MAX_STREAM_EVENT_BYTES,
@@ -742,6 +786,7 @@ class QwenHttpServer:
                 "output_queue_chunks": self.output_queue_chunks,
                 "max_output_bytes": self.max_output_bytes,
                 "synthesis_timeout_seconds": self.synthesis_timeout_seconds,
+                "fragment_lookahead_words": self.fragment_lookahead_words,
             },
             "authentication": {"required": self.api_key is not None, "scheme": "bearer"},
             "ready": self.is_ready(),
@@ -1006,7 +1051,6 @@ class QwenHttpServer:
             with self._operation_lock:
                 if state.cancelled.is_set() or self._shutting_down.is_set():
                     return
-                state.set_engine_active(True)
                 self.engine.set_voice(
                     self.registry.to_voice(record, request.language, request.instructions)
                 )
@@ -1024,7 +1068,15 @@ class QwenHttpServer:
                     max_output_bytes=self.max_output_bytes,
                 )
                 try:
-                    ok = bool(self.engine.synthesize(request.text))
+                    if not state.begin_engine():
+                        return
+                    try:
+                        ok = bool(self.engine.synthesize(request.text))
+                    finally:
+                        state.end_engine()
+                        resume = getattr(self.engine, "resume", None)
+                        if callable(resume):
+                            resume()
                 finally:
                     self.engine.queue = original_queue
                     with state._lifecycle_lock:
@@ -1064,7 +1116,9 @@ class QwenHttpServer:
                 self.metrics.synthesis_failure()
                 LOGGER.exception("Qwen HTTP synthesis worker failed")
         finally:
-            state.set_engine_active(False)
+            state.end_engine()
+            with state._lifecycle_lock:
+                state.engine_done.set()
             self.metrics.finished()
             timer = state.timeout_timer
             if timer is not None:
@@ -1088,8 +1142,30 @@ class QwenHttpServer:
                 self._states.discard(state)
             self._request_slots.release()
 
+    def pause(self, state: SynthesisState, timeout: float = PAUSE_ACK_TIMEOUT_SECONDS) -> bool:
+        state.request_pause()
+        if not state.engine_active():
+            return True
+        pause = getattr(self.engine, "pause", None)
+        if not callable(pause):
+            return False
+        started = time.monotonic()
+        if bool(pause(timeout=timeout)):
+            return True
+        remaining = max(0.0, timeout - (time.monotonic() - started))
+        return state.engine_done.wait(remaining) or not state.engine_active()
+
+    def resume(self, state: SynthesisState) -> None:
+        state.request_resume()
+        if not state.engine_active():
+            return
+        resume = getattr(self.engine, "resume", None)
+        if callable(resume):
+            resume()
+
     def cancel(self, state: SynthesisState) -> None:
         state.cancelled.set()
+        state.wake()
         if state.response_format != "wav":
             # Discard buffered PCM and wake a WebSocket/HTTP consumer that is
             # blocked in Queue.get(). The capture queue observes cancelled and
@@ -1193,6 +1269,51 @@ async def _websocket_json(websocket: Any) -> Mapping[str, Any]:
     return event
 
 
+async def _wait_until_stream_resumed(
+    resumed: asyncio.Event,
+    cancelled: asyncio.Event,
+    state: Optional[SynthesisState] = None,
+) -> bool:
+    if resumed.is_set():
+        return not cancelled.is_set() and not (
+            state is not None and state.cancelled.is_set()
+        )
+    resume_task = asyncio.create_task(resumed.wait())
+    cancel_task = asyncio.create_task(cancelled.wait())
+    tasks: list[asyncio.Task[Any]] = [resume_task, cancel_task]
+    state_task: Optional[asyncio.Task[Any]] = None
+    if state is not None:
+        state_task = asyncio.create_task(
+            asyncio.to_thread(state.wait_until_resumed_or_cancelled)
+        )
+        tasks.append(state_task)
+    _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    for task in pending:
+        with suppress(asyncio.CancelledError):
+            await task
+    if cancelled.is_set() or (state is not None and state.cancelled.is_set()):
+        return False
+    if resumed.is_set():
+        return True
+    # The state condition is released before the receiver emits the resumed
+    # acknowledgement and opens the PCM gate. Wait for that ordered commit.
+    return await _wait_until_stream_resumed(resumed, cancelled)
+
+
+async def _send_websocket_json(
+    websocket: Any,
+    event: Mapping[str, Any],
+    send_lock: Optional[asyncio.Lock] = None,
+) -> None:
+    if send_lock is None:
+        await websocket.send_json(dict(event))
+        return
+    async with send_lock:
+        await websocket.send_json(dict(event))
+
+
 async def _send_stream_pcm(
     websocket: Any,
     state: SynthesisState,
@@ -1201,23 +1322,14 @@ async def _send_stream_pcm(
     first_fragment_timings: Optional[Mapping[str, Any]],
     session_id: str,
     cancelled: asyncio.Event,
+    resumed: Optional[asyncio.Event] = None,
+    send_lock: Optional[asyncio.Lock] = None,
 ) -> None:
     first_chunk = True
-    while not cancelled.is_set() and not state.cancelled.is_set():
-        try:
-            chunk = await asyncio.to_thread(state.output.get, True, 0.1)
-        except queue_module.Empty:
-            if cancelled.is_set() or state.cancelled.is_set():
-                break
-            if time.monotonic() >= state.deadline:
-                raise ApiError(504, "timeout_error", "synthesis timed out")
-            continue
-        if chunk is _STREAM_END:
-            break
-        if cancelled.is_set() or state.cancelled.is_set():
-            break
+
+    async def send_chunk(chunk: Any) -> bool:
+        nonlocal first_chunk
         if first_chunk and first_fragment_timings is not None:
-            first_chunk = False
             timings = dict(first_fragment_timings)
             timings["synthesis_to_first_pcm_ms"] = round(
                 (time.monotonic() - synthesis_started) * 1000.0,
@@ -1233,8 +1345,43 @@ async def _send_stream_pcm(
                 }
             )
         if cancelled.is_set() or state.cancelled.is_set():
-            break
+            return False
         await websocket.send_bytes(bytes(chunk))
+        first_chunk = False
+        return True
+
+    while not cancelled.is_set() and not state.cancelled.is_set():
+        try:
+            chunk = await asyncio.to_thread(state.output.get, True, 0.1)
+        except queue_module.Empty:
+            if cancelled.is_set() or state.cancelled.is_set():
+                break
+            if time.monotonic() >= state.deadline:
+                raise ApiError(504, "timeout_error", "synthesis timed out")
+            continue
+        if chunk is _STREAM_END:
+            break
+        if cancelled.is_set() or state.cancelled.is_set():
+            break
+        sent = False
+        while not cancelled.is_set() and not state.cancelled.is_set():
+            if resumed is not None and not await _wait_until_stream_resumed(
+                resumed, cancelled, state
+            ):
+                break
+            if send_lock is None:
+                if resumed is not None and not resumed.is_set():
+                    continue
+                sent = await send_chunk(chunk)
+            else:
+                async with send_lock:
+                    if resumed is not None and not resumed.is_set():
+                        continue
+                    sent = await send_chunk(chunk)
+            if sent or cancelled.is_set() or state.cancelled.is_set():
+                break
+        if not sent:
+            break
     if state.error_type is not None and (
         not state.cancelled.is_set() or state.abort_error
     ):
@@ -1407,6 +1554,9 @@ def create_app(server: QwenHttpServer) -> Any:
         session_id = _new_client_id(websocket.headers.get("x-session-id"))
         items: asyncio.Queue[Any] = asyncio.Queue()
         cancelled = asyncio.Event()
+        stream_resumed = asyncio.Event()
+        stream_resumed.set()
+        send_lock = asyncio.Lock()
         input_ended = asyncio.Event()
         config_ready: asyncio.Future[SpeechOptions] = (
             asyncio.get_running_loop().create_future()
@@ -1500,9 +1650,53 @@ def create_app(server: QwenHttpServer) -> Any:
                         await finish_input()
                         # End closes the text channel, not the control channel.
                         # Continue receiving so playback can still be cancelled.
+                    elif event_type == "pause":
+                        state = current_state[0]
+                        if state is not None:
+                            state.request_pause()
+                        stream_resumed.clear()
+                        if state is not None:
+                            paused = await asyncio.to_thread(
+                                server.pause,
+                                state,
+                                PAUSE_ACK_TIMEOUT_SECONDS,
+                            )
+                            if not paused:
+                                raise ApiError(
+                                    503,
+                                    "server_error",
+                                    "native synthesis did not acknowledge pause",
+                                )
+                        await _send_websocket_json(
+                            websocket,
+                            {
+                                "type": "paused",
+                                "session_id": session_id,
+                                "request_id": (
+                                    state.request_id if state is not None else last_request_id[0]
+                                ),
+                            },
+                            send_lock,
+                        )
+                    elif event_type == "resume":
+                        state = current_state[0]
+                        if state is not None:
+                            await asyncio.to_thread(server.resume, state)
+                        async with send_lock:
+                            await websocket.send_json(
+                                {
+                                    "type": "resumed",
+                                    "session_id": session_id,
+                                    "request_id": (
+                                        state.request_id if state is not None else last_request_id[0]
+                                    ),
+                                }
+                            )
+                            stream_resumed.set()
                     elif event_type == "cancel":
                         cancel_requested.set()
                         cancelled.set()
+                        stream_resumed.set()
                         await finish_input()
                         cancel_current()
                         return
@@ -1516,6 +1710,7 @@ def create_app(server: QwenHttpServer) -> Any:
                 raise
             except WebSocketDisconnect as exc:
                 cancelled.set()
+                stream_resumed.set()
                 receiver_error[0] = exc
                 await finish_input()
                 cancel_current()
@@ -1523,6 +1718,7 @@ def create_app(server: QwenHttpServer) -> Any:
                     config_ready.set_exception(exc)
             except BaseException as exc:
                 cancelled.set()
+                stream_resumed.set()
                 receiver_error[0] = exc
                 await finish_input()
                 cancel_current()
@@ -1619,6 +1815,7 @@ def create_app(server: QwenHttpServer) -> Any:
                 quick_yield_for_all_sentences=True,
                 quick_yield_every_fragment=False,
                 force_first_fragment_after_words=_NO_FORCED_FIRST_FRAGMENT,
+                fragment_lookahead_words=server.fragment_lookahead_words,
             ):
                 if cancelled.is_set():
                     break
@@ -1642,14 +1839,16 @@ def create_app(server: QwenHttpServer) -> Any:
                             3,
                         ),
                     }
-                    await websocket.send_json(
+                    await _send_websocket_json(
+                        websocket,
                         {
                             "type": "fragment_ready",
                             "session_id": session_id,
                             "request_id": fragment_request_id,
                             "audio": dict(AUDIO_METADATA),
                             "timings": first_fragment_timings,
-                        }
+                        },
+                        send_lock,
                     )
                 request = SpeechRequest(
                     text,
@@ -1667,6 +1866,10 @@ def create_app(server: QwenHttpServer) -> Any:
                     )
                 # A cancel can arrive while fragment metadata or language
                 # routing awaits. Never start a worker after that cancel won.
+                if not await _wait_until_stream_resumed(
+                    stream_resumed, cancelled
+                ):
+                    break
                 if cancelled.is_set():
                     break
                 synthesis_started = time.monotonic()
@@ -1681,6 +1884,8 @@ def create_app(server: QwenHttpServer) -> Any:
                     first_fragment_timings=first_fragment_timings,
                     session_id=session_id,
                     cancelled=cancelled,
+                    resumed=stream_resumed,
+                    send_lock=send_lock,
                 )
                 current_state[0] = None
             # Terminal commit point: after all synthesis/PCM has completed,
@@ -1694,26 +1899,32 @@ def create_app(server: QwenHttpServer) -> Any:
             if error is not None and not isinstance(error, WebSocketDisconnect):
                 raise error
             if cancel_requested.is_set() and error is None:
-                await websocket.send_json(
+                await _send_websocket_json(
+                    websocket,
                     {
                         "type": "cancelled",
                         "session_id": session_id,
                         "request_id": last_request_id[0],
-                    }
+                    },
+                    send_lock,
                 )
             elif not cancelled.is_set() and error is None:
-                await websocket.send_json(
+                await _send_websocket_json(
+                    websocket,
                     {
                         "type": "done",
                         "session_id": session_id,
                         "request_id": last_request_id[0],
-                    }
+                    },
+                    send_lock,
                 )
         except WebSocketDisconnect:
             cancelled.set()
+            stream_resumed.set()
             cancel_current()
         except BaseException as exc:
             cancelled.set()
+            stream_resumed.set()
             cancel_current()
             if isinstance(exc, ApiError):
                 error_type = exc.error_type
@@ -1723,7 +1934,8 @@ def create_app(server: QwenHttpServer) -> Any:
                 message = str(exc) or exc.__class__.__name__
                 LOGGER.exception("Qwen WebSocket synthesis failed")
             with suppress(Exception):
-                await websocket.send_json(
+                await _send_websocket_json(
+                    websocket,
                     {
                         "type": "error",
                         "session_id": session_id,
@@ -1734,9 +1946,11 @@ def create_app(server: QwenHttpServer) -> Any:
                         ),
                         "message": message,
                         "error": {"type": error_type, "message": message},
-                    }
+                    },
+                    send_lock,
                 )
         finally:
+            stream_resumed.set()
             if not receiver.done():
                 receiver.cancel()
             with suppress(asyncio.CancelledError, WebSocketDisconnect):
@@ -1761,6 +1975,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--alias", default="qwen3-tts-native-q8")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument(
+        "--fragment-lookahead-words",
+        type=int,
+        default=0,
+        help=(
+            "Complete words to buffer before choosing a quick-yield boundary; "
+            "sentence endings are preferred over commas"
+        ),
+    )
     parser.add_argument(
         "--allow-lan",
         action="store_true",
@@ -1918,6 +2141,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         parser.error("--model and --codec must be supplied together")
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
+    if args.fragment_lookahead_words < 0:
+        parser.error("--fragment-lookahead-words must not be negative")
     if args.startup_warmup_tokens <= 0:
         parser.error("--startup-warmup-tokens must be positive")
     if (
@@ -2009,6 +2234,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         api_key=api_key,
         cors_origins=args.cors_origin,
         language_router=language_router,
+        fragment_lookahead_words=args.fragment_lookahead_words,
     )
     LOGGER.info(
         "Loaded RealtimeTTS QwenEngine (native=%s, ABI=%s); listening on %s:%s",

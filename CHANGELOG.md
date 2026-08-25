@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.5.dev0
+
+- Add acknowledged native Qwen pause/resume controls to the WebSocket server.
+- Add opt-in eight-word fragment lookahead support through stream2sentence 1.0.4.
+- Keep the cancellation-fixed v0.7.4 server and `realtimetts-qwen-native`
+  package baseline.
+
 ## 0.7.4
 
 ### Added

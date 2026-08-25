@@ -112,6 +112,64 @@ class LateChunkEngine(FakeEngine):
         return True
 
 
+class PauseResumeEngine(FakeEngine):
+    """Engine whose synthesis loop has an acknowledged compute pause point."""
+
+    def __init__(self):
+        super().__init__()
+        self.started = threading.Event()
+        self.stop_called = threading.Event()
+        self.release = threading.Event()
+        self._control = threading.Condition()
+        self._pause_requested = False
+        self._paused = False
+        self.produced_chunks = 0
+
+    def synthesize(self, text):
+        del text
+        self.last_error = None
+        self.started.set()
+        while not self.release.is_set():
+            with self._control:
+                while self._pause_requested and not self.release.is_set():
+                    self._paused = True
+                    self._control.notify_all()
+                    self._control.wait()
+                self._paused = False
+                self._control.notify_all()
+            if self.release.is_set():
+                break
+            self.queue.put(self.audible)
+            self.produced_chunks += 1
+            time.sleep(0.001)
+        return True
+
+    def pause(self, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        with self._control:
+            self._pause_requested = True
+            self._control.notify_all()
+            while not self._paused and not self.release.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._control.wait(remaining)
+            return self._paused
+
+    def resume(self):
+        with self._control:
+            self._pause_requested = False
+            self._control.notify_all()
+
+    def stop(self):
+        super().stop()
+        self.stop_called.set()
+        self.release.set()
+        with self._control:
+            self._pause_requested = False
+            self._control.notify_all()
+
+
 def _server(tmp_path, engine=None, **kwargs):
     return QwenHttpServer(
         engine or FakeEngine(),
@@ -210,7 +268,7 @@ def test_server_version_prefers_source_checkout_over_installed_metadata(monkeypa
         "version",
         lambda _name: "0.7.4.dev7",
     )
-    assert qwen_server_module._server_version() == "0.7.4"
+    assert qwen_server_module._server_version() == "0.7.5.dev0"
 
 
 def test_api_key_cors_and_lan_bind_defaults_are_restrictive(tmp_path, monkeypatch):
@@ -465,6 +523,94 @@ def test_websocket_cancel_after_end_interrupts_active_audio(tmp_path, monkeypatc
         server.shutdown()
 
 
+def test_websocket_pause_resume_is_acknowledged_idempotent_and_stress_safe(
+    tmp_path, monkeypatch
+):
+    async def fragment_stream(source, **_kwargs):
+        pending = ""
+        async for chunk in source:
+            pending += chunk
+        if pending.strip():
+            yield pending.strip()
+
+    monkeypatch.setattr(qwen_server_module, "generate_sentences_async", fragment_stream)
+    engine = PauseResumeEngine()
+    server = _server(tmp_path, engine)
+
+    def receive_until(websocket, event_type):
+        audio_bytes = 0
+        while True:
+            message = websocket.receive()
+            chunk = message.get("bytes")
+            if chunk is not None:
+                audio_bytes += len(chunk)
+                continue
+            event = json.loads(message["text"])
+            if event["type"] == event_type:
+                return event, audio_bytes
+            assert event["type"] not in {"error", "done", "cancelled"}, event
+
+    with TestClient(create_app(server)) as client:
+        _register(client)
+        controls = client.get("/v1/capabilities").json()["stream_controls"]
+        assert controls == {
+            "input_events": ["pause", "resume", "cancel"],
+            "pause_acknowledgement": "native_checkpoint",
+        }
+        with client.websocket_connect("/v1/audio/speech-stream") as websocket:
+            websocket.send_json(
+                {
+                    "type": "config",
+                    "voice": "mira",
+                    "language": "English",
+                    "response_format": "pcm",
+                }
+            )
+            websocket.send_json(
+                {
+                    "type": "text",
+                    "text": "This stream has enough words to yield a partial fragment,",
+                }
+            )
+            websocket.send_json({"type": "end"})
+
+            assert receive_until(websocket, "fragment_ready")[0]["type"] == "fragment_ready"
+            assert receive_until(websocket, "first_pcm_ready")[0]["type"] == "first_pcm_ready"
+            assert websocket.receive_bytes() == engine.audible
+            assert engine.started.wait(timeout=1)
+
+            websocket.send_json({"type": "pause"})
+            paused_event = receive_until(websocket, "paused")[0]
+            control_identity = {
+                "session_id": paused_event["session_id"],
+                "request_id": paused_event["request_id"],
+            }
+
+            def assert_control_event(event, event_type):
+                assert event["type"] == event_type
+                assert {key: event[key] for key in control_identity} == control_identity
+
+            paused_count = engine.produced_chunks
+            time.sleep(0.02)
+            assert engine.produced_chunks == paused_count
+
+            websocket.send_json({"type": "pause"})
+            assert_control_event(receive_until(websocket, "paused")[0], "paused")
+            for _ in range(50):
+                websocket.send_json({"type": "resume"})
+                assert_control_event(receive_until(websocket, "resumed")[0], "resumed")
+                websocket.send_json({"type": "pause"})
+                assert_control_event(receive_until(websocket, "paused")[0], "paused")
+
+            paused_count = engine.produced_chunks
+            time.sleep(0.02)
+            assert engine.produced_chunks == paused_count
+            websocket.send_json({"type": "cancel"})
+            assert_control_event(receive_until(websocket, "cancelled")[0], "cancelled")
+
+    assert engine.stop_called.wait(timeout=1)
+
+
 def test_websocket_pcm_sender_drops_chunk_when_cancel_wins_ready_race():
     class CancelOnReadyWebSocket:
         def __init__(self, cancelled):
@@ -641,11 +787,14 @@ def test_startup_warmup_cli_is_opt_in():
             "Short warmup.",
             "--startup-warmup-tokens",
             "8",
+            "--fragment-lookahead-words",
+            "8",
         ]
     )
 
     assert defaults.startup_warmup_voice is None
     assert defaults.startup_warmup_tokens == 32
+    assert defaults.fragment_lookahead_words == 0
     assert defaults.clamp_fp16 is True
     assert defaults.trim_silence is True
     assert defaults.silence_threshold == 0.005
@@ -655,6 +804,7 @@ def test_startup_warmup_cli_is_opt_in():
     assert configured.startup_warmup_voice == "mira"
     assert configured.startup_warmup_text == "Short warmup."
     assert configured.startup_warmup_tokens == 8
+    assert configured.fragment_lookahead_words == 8
     assert parser.parse_args(["--no-clamp-fp16"]).clamp_fp16 is False
     assert parser.parse_args(["--no-trim-silence"]).trim_silence is False
 
@@ -834,6 +984,75 @@ def test_auto_language_routes_native_language_and_matching_reference(tmp_path):
     assert engine.current_voice.name == "mira_v5_spark_de"
     assert engine.current_voice.language == "german"
     assert engine.current_voice.ref_text == "Deutsche Referenz"
+
+
+def test_stream_fragment_lookahead_prefers_sentence_end_then_comma(tmp_path):
+    class RecordingEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.synthesis_calls = []
+
+        def synthesize(self, text):
+            self.synthesis_calls.append(text)
+            return super().synthesize(text)
+
+    engine = RecordingEngine()
+    server = _server(tmp_path, engine, fragment_lookahead_words=8)
+
+    def synthesize_chunks(client, chunks):
+        with client.websocket_connect("/v1/audio/speech-stream") as websocket:
+            websocket.send_json(
+                {
+                    "type": "config",
+                    "voice": "mira",
+                    "language": "German",
+                    "response_format": "pcm",
+                }
+            )
+            for chunk in chunks:
+                websocket.send_json({"type": "text", "text": chunk})
+            websocket.send_json({"type": "end"})
+            while True:
+                message = websocket.receive()
+                if message.get("bytes") is not None:
+                    continue
+                event = json.loads(message["text"])
+                assert event["type"] != "error", event
+                if event["type"] == "done":
+                    return
+
+    with TestClient(create_app(server)) as client:
+        _register(client)
+        synthesize_chunks(
+            client,
+            ["Freut ", "mich, ", "das ", "zu ", "hören."],
+        )
+        assert engine.synthesis_calls == ["Freut mich, das zu hören."]
+
+        engine.synthesis_calls.clear()
+        synthesize_chunks(
+            client,
+            [
+                "Freut ",
+                "mich, ",
+                "dass ",
+                "Sie ",
+                "sich ",
+                "nach ",
+                "so ",
+                "langer ",
+                "Zeit ",
+                "wieder ",
+                "einmal ",
+                "hier ",
+                "einfinden.",
+            ],
+        )
+
+    assert engine.synthesis_calls == [
+        "Freut mich,",
+        "dass Sie sich nach so langer Zeit wieder einmal hier einfinden.",
+    ]
 
 
 def test_stream_lookahead_reclassifies_then_locks_german_for_the_response(
