@@ -3,13 +3,11 @@ theme:
   name: material
   language: en
   features:
-    - navigation.instant
     - navigation.top
     - navigation.tabs
 
 plugins:
   - i18n:
-      default_language: en
       languages:
         - locale: en
           name: English
@@ -83,6 +81,9 @@ nav:
       - SoproTTS: engines/sopro.md
       - Soprano: engines/soprano.md
       - MOSS-TTS: engines/moss-tts.md
+      - Higgs Audio v3: engines/higgs.md
+      - Breeze TTS 2: engines/breeze-tts.md
+  - Forced Alignment: ctc-forced-alignment.md
   - Feed And Playback: feed-and-playback.md
   - LLM Streaming: llm-streaming.md
   - Output And Files: output-and-files.md

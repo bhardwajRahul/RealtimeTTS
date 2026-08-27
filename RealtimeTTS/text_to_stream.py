@@ -15,7 +15,9 @@ Converts text into real-time audio using one or more TTS engines. Key features i
 from .threadsafe_generators import CharIterator, AccumulatingThreadSafeGenerator
 from .stream_player import StreamPlayer, AudioConfiguration
 from typing import Union, Iterator, List
-from .engines import BaseEngine
+from .alignment.audio import is_alignable_stream_format
+from .alignment.capture import CapturedAudioSegment, CapturingAudioQueue
+from .engines import BaseEngine, TimingInfo
 from ._audio_backend import pa, pyaudio
 import re
 import numpy as np
@@ -58,6 +60,9 @@ class TextToAudioStream:
         frames_per_buffer: int = pa.paFramesPerBufferUnspecified,
         playout_chunk_size: int = -1,
         level=logging.WARNING,
+        align_words: bool = False,
+        word_aligner=None,
+        alignment_blocking: bool = False,
     ):
         """
         Initializes the TextToAudioStream.
@@ -102,8 +107,9 @@ class TextToAudioStream:
                 A callback function triggered when a word is spoken. This can be
                 useful for tracking word-level progress or highlighting spoken
                 words in a text display.
-                Currently only works for AzureEngine and KokoroEngine, since
-                the other engines don't provide word-level timings.
+                Native timings are used when an engine provides them. For other
+                engines, set align_words=True to enable optional forced
+                alignment.
 
             output_device_index (int, optional):
                 The index of the audio output device to use for playback.
@@ -159,6 +165,19 @@ class TextToAudioStream:
                 The logging level to use for internal logging. Accepts standard
                 Python logging levels, such as `logging.DEBUG`, `logging.INFO`,
                 `logging.WARNING`, etc. Defaults to `logging.WARNING`.
+
+            align_words (bool, optional):
+                If True, capture synthesized sentence audio and use a forced
+                aligner for engines without native word timings.
+
+            word_aligner (optional):
+                Custom aligner implementing align_words(text, audio, sample_rate).
+                If omitted while align_words is enabled, the omniASR CTC aligner
+                is created lazily.
+
+            alignment_blocking (bool, optional):
+                If True, finish alignment after each synthesized sentence before
+                continuing. Defaults to False so generation is not blocked.
         """
         self.log_characters = log_characters
         self.on_text_stream_start = on_text_stream_start
@@ -177,6 +196,13 @@ class TextToAudioStream:
         self.global_muted = muted
         self.frames_per_buffer = frames_per_buffer
         self.playout_chunk_size = playout_chunk_size
+        self.align_words = bool(align_words)
+        self.word_aligner = word_aligner
+        self.alignment_blocking = bool(alignment_blocking)
+        self._alignment_capture_queue = None
+        self._alignment_lock = threading.Lock()
+        self._alignment_threads = []
+        self._alignment_generation = 0
         self.player = None
         self.play_lock = threading.Lock()
         self.is_playing_flag = False
@@ -226,6 +252,19 @@ class TextToAudioStream:
 
         # Extract stream information (format, channels, rate) from the engine
         format, channels, rate = self.engine.get_stream_info()
+
+        self._alignment_capture_queue = None
+        if self._should_capture_alignment_audio(format, channels, rate):
+            if isinstance(self.engine.queue, CapturingAudioQueue):
+                self._alignment_capture_queue = self.engine.queue
+            else:
+                self._alignment_capture_queue = CapturingAudioQueue(
+                    self.engine.queue,
+                    format,
+                    channels,
+                    rate,
+                )
+                self.engine.queue = self._alignment_capture_queue
 
         # An engine can opt in when stream2sentence's one-time import would
         # otherwise dominate its first-response latency.
@@ -547,10 +586,13 @@ class TextToAudioStream:
             muted = True
 
         if is_external_call:
-            self.engine.reset_audio_duration()
             if not self.play_lock.acquire(blocking=False):
                 logging.warning("play() called while already playing audio, skipping")
                 return
+            self._alignment_generation += 1
+            self.engine.reset_audio_duration()
+            if self._alignment_capture_queue:
+                self._alignment_capture_queue.reset_tracking()
 
         self.is_playing_flag = True
         self.error_flag = False
@@ -633,6 +675,7 @@ class TextToAudioStream:
                 self._create_iterators()
 
                 if is_external_call:
+                    self._alignment_generation += 1
                     self.is_playing_flag = False
                     self.play_lock.release()
         else:
@@ -719,8 +762,17 @@ class TextToAudioStream:
                                 if before_sentence_synthesized:
                                     before_sentence_synthesized(sentence)
 
-                                success = self.engine.synthesize(sentence, sentence_count)
+                                alignment_segment = None
+                                capture_started = self._start_alignment_capture(sentence)
+                                try:
+                                    success = self.engine.synthesize(sentence, sentence_count)
+                                finally:
+                                    alignment_segment = self._finish_alignment_capture(
+                                        capture_started
+                                    )
 
+                                if success and alignment_segment:
+                                    self._schedule_alignment(alignment_segment)
 
                                 end_sentence_delimeters = ".!?…。¡¿"
                                 mid_sentence_delimeters = ";:,\n()[]{}-“”„”—/|《》"
@@ -866,6 +918,7 @@ class TextToAudioStream:
                 if self.on_audio_stream_stop:
                     self.on_audio_stream_stop()
 
+                self._alignment_generation += 1
                 self.is_playing_flag = False
                 self.play_lock.release()
 
@@ -890,6 +943,8 @@ class TextToAudioStream:
         """
         Stops the playback of the synthesized audio stream immediately.
         """
+        self._alignment_generation += 1
+
         if self.engine:
             self.engine.stop()
 
@@ -1127,6 +1182,95 @@ class TextToAudioStream:
         pause_tag = match.group("tag").strip()
         pause_duration = float(match.group("duration"))
         return pause_tag, pause_duration
+
+    def _should_capture_alignment_audio(self, stream_format, channels, rate):
+        if not self.align_words:
+            return False
+        if self._engine_has_native_word_timings(self.engine):
+            return False
+        if self.engine.can_consume_generators:
+            logging.warning(
+                "Forced word alignment is only available for sentence/chunk engines."
+            )
+            return False
+        if not is_alignable_stream_format(stream_format, channels, rate):
+            logging.warning(
+                "Forced word alignment is unavailable for engine %s because "
+                "its stream format cannot be decoded.",
+                self.engine.engine_name,
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _engine_has_native_word_timings(engine):
+        return bool(getattr(engine, "provides_word_timings", False))
+
+    def _start_alignment_capture(self, sentence):
+        if not self._alignment_capture_queue:
+            return False
+        return self._alignment_capture_queue.start_capture(sentence)
+
+    def _finish_alignment_capture(self, capture_started):
+        if not capture_started or not self._alignment_capture_queue:
+            return None
+        segment = self._alignment_capture_queue.finish_capture()
+        if not segment or not segment.audio_bytes:
+            return None
+        return segment
+
+    def _ensure_word_aligner(self):
+        if self.word_aligner is None:
+            from .alignment.omniasr import OmniASRCTCAligner
+
+            self.word_aligner = OmniASRCTCAligner()
+        return self.word_aligner
+
+    def _schedule_alignment(self, segment: CapturedAudioSegment):
+        aligner = self._ensure_word_aligner()
+        timings_queue = self.engine.timings
+        generation = self._alignment_generation
+
+        if self.alignment_blocking:
+            self._run_alignment(segment, timings_queue, aligner, generation)
+            return
+
+        self._alignment_threads = [
+            thread for thread in self._alignment_threads if thread.is_alive()
+        ]
+        alignment_thread = threading.Thread(
+            target=self._run_alignment,
+            args=(segment, timings_queue, aligner, generation),
+            daemon=True,
+        )
+        self._alignment_threads.append(alignment_thread)
+        alignment_thread.start()
+
+    def _run_alignment(
+        self,
+        segment: CapturedAudioSegment,
+        timings_queue,
+        aligner,
+        generation,
+    ):
+        try:
+            audio, sample_rate = segment.to_mono_float32()
+            with self._alignment_lock:
+                alignments = aligner.align_words(segment.text, audio, sample_rate)
+            if generation != self._alignment_generation:
+                return
+            for alignment in alignments:
+                if generation != self._alignment_generation:
+                    return
+                start_time = segment.start_time + float(alignment.start_time)
+                end_time = segment.start_time + float(alignment.end_time)
+                if end_time < start_time:
+                    continue
+                timings_queue.put(
+                    TimingInfo(start_time, end_time, str(alignment.word))
+                )
+        except Exception as exc:
+            logging.warning("Forced word alignment failed: %s", exc)
 
     def _extract_voice_switch_actions(self, text: str):
         """

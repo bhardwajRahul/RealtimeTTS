@@ -34,6 +34,8 @@ __all__ = [
     "SoproTTSEngine", "SoproTTSVoice",
     "SopranoEngine", "SopranoVoice",
     "MossTTSEngine", "MossTTSVoice",
+    "HiggsEngine", "HiggsVoice",
+    "BreezeTTSEngine", "BreezeTTSVoice",
 ]
 
 
@@ -451,6 +453,32 @@ def _load_moss_tts_engine():
     globals()["MossTTSVoice"] = MossTTSVoice
     return MossTTSEngine
 
+
+def _load_higgs_engine():
+    try:
+        from .engines.higgs_engine import HiggsEngine, HiggsVoice
+    except ImportError as e:
+        raise ImportError(
+            "Failed to load HiggsEngine and HiggsVoice. "
+            "Install with: pip install realtimetts[higgs]"
+        ) from e
+    globals()["HiggsEngine"] = HiggsEngine
+    globals()["HiggsVoice"] = HiggsVoice
+    return HiggsEngine
+
+
+def _load_breeze_tts_engine():
+    try:
+        from .engines.breeze_tts_engine import BreezeTTSEngine, BreezeTTSVoice
+    except ImportError as e:
+        raise ImportError(
+            "Failed to load BreezeTTSEngine and BreezeTTSVoice. "
+            "Install with: pip install realtimetts[breeze]"
+        ) from e
+    globals()["BreezeTTSEngine"] = BreezeTTSEngine
+    globals()["BreezeTTSVoice"] = BreezeTTSVoice
+    return BreezeTTSEngine
+
 # Mapping names to their lazy loader functions.
 _lazy_imports = {
     "TextToAudioStream": _load_text_to_audio_stream,
@@ -515,6 +543,10 @@ _lazy_imports = {
     "SopranoVoice": _load_soprano_engine,
     "MossTTSEngine": _load_moss_tts_engine,
     "MossTTSVoice": _load_moss_tts_engine,
+    "HiggsEngine": _load_higgs_engine,
+    "HiggsVoice": _load_higgs_engine,
+    "BreezeTTSEngine": _load_breeze_tts_engine,
+    "BreezeTTSVoice": _load_breeze_tts_engine,
 }
 
 

@@ -86,3 +86,33 @@ def test_pocket_engine_loads_model_on_requested_device(monkeypatch):
         assert engine.sample_rate == 24000
     finally:
         engine.shutdown()
+
+
+def test_pocket_engine_loads_requested_language(monkeypatch):
+    loaded_kwargs = []
+
+    class FakeModel:
+        sample_rate = 24000
+
+        def to(self, _device):
+            return self
+
+    class FakeTTSModel:
+        @classmethod
+        def load_model(cls, **kwargs):
+            loaded_kwargs.append(kwargs)
+            return FakeModel()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pocket_tts",
+        types.SimpleNamespace(TTSModel=FakeTTSModel),
+    )
+    monkeypatch.setattr(PocketTTSEngine, "set_voice", lambda self, voice: None)
+
+    engine = PocketTTSEngine(language="english_2026-04")
+    try:
+        assert engine.language == "english_2026-04"
+        assert loaded_kwargs == [{"language": "english_2026-04"}]
+    finally:
+        engine.shutdown()

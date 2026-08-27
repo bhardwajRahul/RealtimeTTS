@@ -123,7 +123,7 @@ stream.stop()
 ## 需求说明
 
 - **Python 版本**：
-  - **要求**：Python >= 3.9，< 3.13
+  - **要求**：Python >= 3.10，< 3.15
   - **原因**： 该库依赖于来自coqui的GitHub库“TTS”，该库需要在此范围内的Python版本。
 
 - **PyAudio**：用于创建输出音频流

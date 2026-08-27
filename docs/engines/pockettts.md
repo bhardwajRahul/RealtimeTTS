@@ -47,6 +47,16 @@ This is equivalent to:
 engine = PocketTTSEngine(voice="alba", device="cpu")
 ```
 
+Pass `language` when selecting a Pocket TTS language configuration instead of
+the package default:
+
+```python
+engine = PocketTTSEngine(voice="alba", language="english")
+```
+
+`language` is forwarded to `TTSModel.load_model(language=...)` when no explicit
+`model_config` is supplied.
+
 To try CUDA, install a CUDA-enabled PyTorch build first, then pass a CUDA device:
 
 ```python
@@ -119,6 +129,8 @@ tokenizer.
   a prompt as a built-in voice.
 - The model is loaded with `TTSModel.load_model()` and then moved to the
   selected Torch device.
+- `language` selects the upstream Pocket TTS language configuration when the
+  engine is not given an explicit `model_config`.
 - Voice states are cached by voice name and prompt path.
 - Output is mono 16-bit PCM at the model sample rate, falling back to 24000 Hz.
 - `PocketTTSGpuEngine` defaults to `variant="b6369a24"` and `device="cuda"`.

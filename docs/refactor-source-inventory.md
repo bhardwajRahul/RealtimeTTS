@@ -93,8 +93,7 @@ Packaging mismatches to preserve as follow-ups, not docs assumptions:
 - `all` is broader now, but remains a best-effort Python dependency set; it
   cannot install OS tools, provider accounts, CUDA wheel choices, or model
   downloads.
-- `setup.py` declares Python `>=3.9, <3.15`; `docs/en/usage.md` still says
-  Python `<3.13`.
+- `setup.py` and the translated usage pages declare Python `>=3.10, <3.15`.
 - `setup.py` prepends custom installation guidance to the README for the PyPI
   long description. The README reset should decide whether PyPI uses the compact
   README as-is or a generated long description before editing `setup.py`.

@@ -263,12 +263,14 @@ def test_protocol_capabilities_readiness_ids_and_audio_metadata(tmp_path):
 
 
 def test_server_version_prefers_source_checkout_over_installed_metadata(monkeypatch):
+    from RealtimeTTS._version import __version__
+
     monkeypatch.setattr(
         qwen_server_module.importlib.metadata,
         "version",
         lambda _name: "0.7.4.dev7",
     )
-    assert qwen_server_module._server_version() == "0.7.5.dev0"
+    assert qwen_server_module._server_version() == __version__
 
 
 def test_api_key_cors_and_lan_bind_defaults_are_restrictive(tmp_path, monkeypatch):

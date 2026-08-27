@@ -147,8 +147,8 @@ The native Qwen binding is `ctypes`-based rather than a CPython extension, so
 its `py3-none` wheel can load on Python 3.10 through 3.14. Supported RealtimeTTS
 local playback on Windows is narrower—Python 3.10–3.13—because PyAudio 0.2.14
 does not publish a Windows Python 3.14 wheel.
-RealtimeTTS supports Python 3.9 for some other engines; that does not make the
-Qwen extra installable on Python 3.9.
+RealtimeTTS itself supports Python 3.10 through 3.14; use Python 3.13 or older
+when local Windows playback requires PyAudio.
 
 | Platform | Status/requirement |
 | --- | --- |
@@ -312,11 +312,11 @@ CPU and macOS wheels do not need it:
 
 ```bash
 python -m venv /path/to/fresh-venv
-# Windows x86-64 CUDA candidate:
+# Windows x86-64 CUDA wheel:
 /path/to/fresh-venv/bin/python -m pip install \
   --find-links /path/to/wheelhouse \
   "realtimetts-qwen-native[cuda12]==0.1.0"
-# Linux x86-64 CUDA candidate (use this line instead on Linux):
+# Linux x86-64 CUDA wheel (use this line instead on Linux):
 /path/to/fresh-venv/bin/python -m pip install \
   --find-links /path/to/wheelhouse \
   "realtimetts-qwen-native[cuda12]==0.1.0"
@@ -693,7 +693,5 @@ Before publishing a compatible release, build and repair the primary Windows
 x86-64 and Linux x86-64 wheels in the `realtimetts-qwen-native` project. In fresh
 virtual environments on both target operating systems, verify `doctor`, model
 loading, x-vector, ICL, repeated requests, cancellation/reuse, and valid 24 kHz
-mono output without a repository checkout or system CUDA Toolkit. The current
-dev9 candidate deliberately uses the validated platform matrix above; a stable
-release still requires final native package versioning and acceptance for both
-platforms. Rebuild both artifacts rather than renaming test wheels.
+mono output without a repository checkout or system CUDA Toolkit. Rebuild both
+artifacts for a changed native revision rather than renaming test wheels.

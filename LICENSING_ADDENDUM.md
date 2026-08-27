@@ -24,3 +24,11 @@ For a summary of known Third-Party Engine licenses and links to their terms,
 please consult the project's README file. The information in the README is 
 for guidance only and does not constitute legal advice; users should always 
 refer to the official licensing documentation of each Third-Party Engine.
+
+In particular, the optional Breeze TTS 2 adapter does not bundle Breeze model
+materials. BreezeBlue states that its inference source is Apache-2.0, while its
+model weights, derivative models (including quantized variants), and self-hosted
+outputs are governed by the BreezeBlue Research and Non-Commercial License.
+Commercial use requires separate written authorization from the upstream
+licensor. Users are also responsible for obtaining all rights and consents for
+reference audio, cloned voices, inputs, and generated outputs.

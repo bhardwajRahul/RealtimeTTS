@@ -196,10 +196,17 @@ see [docs/output-and-files.md](docs/output-and-files.md).
 | [`SoproTTSEngine`](docs/engines/sopro.md) | Local neural | `realtimetts[sopro]` | Sopro reference-audio voices. |
 | [`SopranoEngine`](docs/engines/soprano.md) | Local neural | `realtimetts[soprano]` | Soprano local synthesis. |
 | [`MossTTSEngine`](docs/engines/moss-tts.md) | Local neural | `realtimetts[moss]`, runtime assets | MOSS-TTS experiments. |
+| [`HiggsEngine`](docs/engines/higgs.md) | Local HTTP PCM server | `realtimetts[higgs]`, separate SGLang-Omni server | Stream Higgs Audio v3 PCM from a trusted server. |
+| [`BreezeTTSEngine`](docs/engines/breeze-tts.md) | Experimental local neural | `realtimetts[breeze]`, pinned upstream source checkout | Bilingual CUDA streaming and voice design; non-commercial model/output license. |
 
 See [docs/engine-selection.md](docs/engine-selection.md) before choosing an
 engine for an application. The engine-specific docs are being split out from the
 old README and source audit.
+
+**Breeze license boundary:** RealtimeTTS code remains MIT-licensed, but Breeze
+TTS 2 model weights, derivatives (including quantized variants), and self-hosted
+outputs are research/non-commercial only unless BreezeBlue grants separate
+written authorization. See the [Breeze guide](docs/engines/breeze-tts.md).
 
 ## Documentation
 
@@ -214,6 +221,8 @@ old README and source audit.
   patterns and latency tuning.
 - [Output and files](docs/output-and-files.md): WAV files, audio chunks, muted
   mode, output devices, mpv, buffering, and volume.
+- [Forced alignment](docs/ctc-forced-alignment.md): optional word and character
+  timing for engines without native timings.
 - [Engine setup pages](docs/engine-selection.md) now link one focused page for
   each concrete engine source.
 - [FAQ](FAQ.md): legacy troubleshooting page while topic docs are being split

@@ -51,8 +51,8 @@ def _venv_python(environment: Path) -> Path:
     return interpreter
 
 
-def _run(command: list[str]) -> None:
-    subprocess.run(command, check=True)
+def _run(command: list[str], *, cwd: Optional[Path] = None) -> None:
+    subprocess.run(command, check=True, cwd=cwd)
 
 
 def _check_wheel_contents(wheel: Path) -> None:
@@ -63,6 +63,9 @@ def _check_wheel_contents(wheel: Path) -> None:
         "RealtimeTTS/qwen_server.py",
         "RealtimeTTS/engines/qwen_engine.py",
         "RealtimeTTS/engines/inflect_engine.py",
+        "RealtimeTTS/engines/higgs_engine.py",
+        "RealtimeTTS/engines/breeze_tts_engine.py",
+        "RealtimeTTS/alignment/__init__.py",
     }
     missing = sorted(required_files - names)
     if missing:
@@ -116,6 +119,9 @@ def _check_sdist_contents(sdist: Path) -> None:
         "RealtimeTTS/qwen_server.py",
         "RealtimeTTS/engines/qwen_engine.py",
         "RealtimeTTS/engines/inflect_engine.py",
+        "RealtimeTTS/engines/higgs_engine.py",
+        "RealtimeTTS/engines/breeze_tts_engine.py",
+        "RealtimeTTS/alignment/__init__.py",
     }
     missing = sorted(required_files - names)
     if missing:
@@ -182,16 +188,18 @@ def main() -> int:
                         "from pathlib import Path",
                         "import RealtimeTTS",
                         "dist = metadata.distribution('realtimetts')",
-                        "assert dist.version == RealtimeTTS.__version__",
+                        "assert dist.version == RealtimeTTS.__version__, (dist.version, RealtimeTTS.__version__, RealtimeTTS.__file__)",
                         "assert RealtimeTTS.__version__",
                         "assert Path(RealtimeTTS.__file__).is_file()",
                         "extras = set(dist.metadata.get_all('Provides-Extra') or [])",
-                        "assert {'qwen-server', 'inflect'} <= extras",
+                        "assert {'qwen-server', 'inflect', 'higgs', 'breeze', 'alignment', 'omniasr'} <= extras",
+                        "assert dist.metadata['Requires-Python'].replace(' ', '') == '>=3.10,<3.15'",
                         "assert any(ep.name == 'realtimetts-qwen-server' for ep in dist.entry_points)",
                         "assert (Path(RealtimeTTS.__file__).parent / '_version.py').is_file()",
                     ]
                 ),
-            ]
+            ],
+            cwd=environment,
         )
 
     checked = wheel.name if sdist is None else f"{wheel.name}, {sdist.name}"

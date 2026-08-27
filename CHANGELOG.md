@@ -1,11 +1,43 @@
 # Changelog
 
-## 0.7.5.dev0
+## 0.8.0 - 2026-08-27
 
-- Add acknowledged native Qwen pause/resume controls to the WebSocket server.
-- Add opt-in eight-word fragment lookahead support through stream2sentence 1.0.4.
-- Keep the cancellation-fixed v0.7.4 server and `realtimetts-qwen-native`
-  package baseline.
+### Added
+
+- Experimental `BreezeTTSEngine` integration for the pinned Breeze TTS 2
+  Linux/CUDA source runtime, including INT8/NF4 loading, reference-guided
+  voices, latency metrics, and a repeatable benchmark tool. Breeze weights,
+  derivatives, and self-hosted outputs remain research/non-commercial.
+- `HiggsEngine`, a small raw-PCM streaming client for separately operated
+  SGLang-Omni Higgs Audio v3 servers, with response-header validation and
+  fallback-safe failures.
+- Optional forced word and character alignment APIs, sentence-audio capture,
+  MMS/torchaudio and omniASR adapters, VAD helpers, and `on_word` integration.
+- A `language` selector for the CPU PocketTTS engine.
+- A bounded Kokoro blended-voice cache and explicit native-timing capability
+  flags for Azure, Cartesia, and Kokoro.
+- Acknowledged native Qwen pause/resume controls for the WebSocket server.
+- Opt-in fragment lookahead through the public `stream2sentence` 1.0.4 release.
+
+### Changed
+
+- Require Python 3.10 through 3.14 for the core package.
+- Keep Breeze's conflict-prone CUDA stack in an explicit `breeze` extra rather
+  than including it in `all`.
+- Pin the Breeze inference source and model revisions used by the adapter and
+  document the upstream license and platform boundary prominently.
+
+### Fixed
+
+- Treat empty Breeze, Higgs, and Kokoro synthesis results as failures instead
+  of successful silent output.
+- Prevent late nonblocking alignment results from leaking into a later playback.
+- Make immediate playback stop finish cleanup deterministically after the
+  playback worker exits, with a bounded watchdog for blocked audio backends.
+- Preserve explicit Kokoro language overrides, reject mixed-language or invalid
+  blend formulas, and release cached pipelines and queues during shutdown.
+- Initialize PocketTTS GPU stateful-module names and restore nested cached state
+  keys correctly.
 
 ## 0.7.4
 

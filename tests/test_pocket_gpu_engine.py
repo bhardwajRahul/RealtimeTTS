@@ -1,3 +1,7 @@
+import sys
+import types
+from pathlib import Path
+
 import numpy as np
 
 from RealtimeTTS import PocketTTSGpuEngine, PocketTTSGpuVoice
@@ -45,3 +49,64 @@ def test_pocket_gpu_voice_representation():
     voice = PocketTTSGpuVoice("demo", audio_prompt_path="voice.wav")
 
     assert "voice.wav" in repr(voice)
+
+
+def test_pocket_gpu_load_voice_state_preserves_dotted_module_names(monkeypatch):
+    class FakeTensor:
+        def to(self, _device):
+            return self
+
+    fake_torch = types.ModuleType("torch")
+    fake_torch.Tensor = FakeTensor
+    fake_safetensors = types.ModuleType("safetensors")
+    fake_safetensors.__path__ = []
+    fake_safetensors_torch = types.ModuleType("safetensors.torch")
+    fake_safetensors_torch.load_file = lambda path, device: {
+        "transformer.layers.0.self_attn.cache": FakeTensor(),
+        "transformer.layers.0.self_attn.current_end": FakeTensor(),
+    }
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "safetensors", fake_safetensors)
+    monkeypatch.setitem(sys.modules, "safetensors.torch", fake_safetensors_torch)
+
+    engine = object.__new__(PocketTTSGpuEngine)
+    engine.device = "cpu"
+    state = engine._load_voice_state(Path("fake.safetensors"))
+
+    assert set(state) == {"transformer.layers.0.self_attn"}
+    assert set(state["transformer.layers.0.self_attn"]) == {
+        "cache",
+        "current_end",
+    }
+
+
+def test_pocket_gpu_stamps_stateful_module_names(monkeypatch):
+    class FakeStatefulModule:
+        pass
+
+    stateful_module = types.ModuleType("pocket_tts.modules.stateful_module")
+    stateful_module.StatefulModule = FakeStatefulModule
+    pocket_tts = types.ModuleType("pocket_tts")
+    pocket_tts.__path__ = []
+    modules = types.ModuleType("pocket_tts.modules")
+    modules.__path__ = []
+    monkeypatch.setitem(sys.modules, "pocket_tts", pocket_tts)
+    monkeypatch.setitem(sys.modules, "pocket_tts.modules", modules)
+    monkeypatch.setitem(
+        sys.modules,
+        "pocket_tts.modules.stateful_module",
+        stateful_module,
+    )
+
+    stateful = FakeStatefulModule()
+
+    class FakeRoot:
+        def named_modules(self):
+            yield "", object()
+            yield "transformer.layers.0.self_attn", stateful
+
+    engine = object.__new__(PocketTTSGpuEngine)
+    engine.model = types.SimpleNamespace(flow_lm=FakeRoot(), mimi=FakeRoot())
+    engine._stamp_stateful_module_names()
+
+    assert stateful._module_absolute_name == "transformer.layers.0.self_attn"

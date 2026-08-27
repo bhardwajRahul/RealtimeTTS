@@ -1,6 +1,6 @@
 # RealtimeTTS
 
-[EN](../en/index.md) | [FR](../fr/index.md) | [ES](../es/index.md) | [DE](../de/index.md) | [IT](../it/index.md) | [ZH](../zh/index.md) | [HN](../hn/index.md)
+[EN](../en/index.md) | [FR](../fr/index.md) | [ES](../es/index.md) | [DE](../de/index.md) | [IT](../it/index.md) | [ZH](../zh/index.md) | [HI](index.md)
 
 > **नोट:** `pip install realtimetts` का बेसिक इंस्टॉलेशन अब अनुशंसित नहीं है, इसके बजाय `pip install realtimetts[all]` का उपयोग करें।
 

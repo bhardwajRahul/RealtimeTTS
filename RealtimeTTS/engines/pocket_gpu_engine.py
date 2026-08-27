@@ -152,12 +152,30 @@ class PocketTTSGpuEngine(BaseEngine):
 
         self.model.to(self.device)
         self.model.eval()
+        self._stamp_stateful_module_names()
         self.sample_rate = int(self.model.sample_rate)
         if self.debug:
             print(
                 f"[PocketTTSGpuEngine] Model loaded on {self.model.device}; "
                 f"sample_rate={self.sample_rate}"
             )
+
+    def _stamp_stateful_module_names(self) -> None:
+        """Initialize PocketTTS state lookup names without allocating caches."""
+        if self.model is None:
+            return
+        try:
+            from pocket_tts.modules.stateful_module import StatefulModule
+        except ImportError:
+            return
+
+        for root_name in ("flow_lm", "mimi"):
+            root_module = getattr(self.model, root_name, None)
+            if root_module is None:
+                continue
+            for module_name, module in root_module.named_modules():
+                if isinstance(module, StatefulModule):
+                    module._module_absolute_name = module_name
 
     def _auto_local_config(self) -> Optional[Path]:
         if self.voice_cache_dir is None:
@@ -294,7 +312,7 @@ class PocketTTSGpuEngine(BaseEngine):
         state: dict[str, Any] = {}
         for key, value in flat.items():
             if "." in key:
-                outer, inner = key.split(".", 1)
+                outer, inner = key.rsplit(".", 1)
                 state.setdefault(outer, {})[inner] = value.to(self.device)
             else:
                 state[key] = value.to(self.device)

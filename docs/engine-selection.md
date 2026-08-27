@@ -16,7 +16,8 @@ Each current concrete engine source now has a focused page under `docs/engines/`
 | Commercial cloud API | `OpenAIEngine`, `AzureEngine`, `ElevenlabsEngine`, `CartesiaEngine`, `MiniMaxEngine`, `CambEngine`, or `ModelsLabEngine` |
 | Word timings | `AzureEngine`; `KokoroEngine` for supported English voices |
 | Fixed local English voice | `InflectEngine` |
-| Local neural voice cloning | `QwenEngine`, `CoquiEngine`, `ZipVoiceEngine`, `OmniVoiceEngine`, `LuxTTSEngine`, `ChatterboxEngine`, `SoproTTSEngine`, `PocketTTSEngine`, `PocketTTSGpuEngine`, `NeuTTSEngine`, or `MossTTSEngine` |
+| Local neural voice cloning | `QwenEngine`, experimental `BreezeTTSEngine`, `CoquiEngine`, `ZipVoiceEngine`, `OmniVoiceEngine`, `LuxTTSEngine`, `ChatterboxEngine`, `SoproTTSEngine`, `PocketTTSEngine`, `PocketTTSGpuEngine`, `NeuTTSEngine`, or `MossTTSEngine` |
+| Separate local synthesis server | `HiggsEngine` for a trusted SGLang-Omni Higgs Audio v3 endpoint |
 | Reliability fallback | Pass a list of compatible engines to `TextToAudioStream` |
 
 ## Engine Matrix
@@ -50,6 +51,8 @@ Each current concrete engine source now has a focused page under `docs/engines/`
 | [`SoproTTSEngine`](engines/sopro.md) | Local neural | `realtimetts[sopro]` | Sopro package, optional HF cache | Native streaming reference-audio workflow. |
 | [`SopranoEngine`](engines/soprano.md) | Local neural | `realtimetts[soprano]` | Soprano package/model assets | Single-voice English streaming. |
 | [`MossTTSEngine`](engines/moss-tts.md) | Local neural | `realtimetts[moss]` plus runtime assets | MOSS-TTS-Nano assets, CUDA/CUDNN depending on backend | Nano ONNX/torch paths documented; Realtime variant blocked. |
+| [`HiggsEngine`](engines/higgs.md) | Local HTTP PCM server | `realtimetts[higgs]` | Separate SGLang-Omni server and model assets | Streams validated mono signed-16 PCM; empty output is a failure. |
+| [`BreezeTTSEngine`](engines/breeze-tts.md) | Experimental local neural | `realtimetts[breeze]` plus pinned official source checkout | Linux, CUDA GPU, SoX, 7.15 GiB checkpoint | Research/non-commercial weights and self-hosted outputs; not included in `all`. |
 
 ## Fallback Engines
 

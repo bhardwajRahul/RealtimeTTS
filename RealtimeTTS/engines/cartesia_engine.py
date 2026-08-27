@@ -84,6 +84,7 @@ class CartesiaEngine(BaseEngine):
 
     def post_init(self):
         self.engine_name = "cartesia"
+        self.provides_word_timings = bool(self.add_timestamps)
 
     def _normalize_output_format(
         self,
@@ -334,6 +335,7 @@ class CartesiaEngine(BaseEngine):
 
         if "add_timestamps" in voice_parameters:
             self.add_timestamps = bool(voice_parameters["add_timestamps"])
+            self.provides_word_timings = self.add_timestamps
 
     def shutdown(self):
         close_fn = getattr(self.client, "close", None)

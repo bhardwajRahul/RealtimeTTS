@@ -38,9 +38,10 @@ if __name__ == "__main__":
   `bf`/`bm` British English, `jf`/`jm` Japanese, `zf`/`zm` Mandarin Chinese,
   plus Spanish, French, Hindi, Italian, and Brazilian Portuguese prefixes.
 - Weighted voice formulas such as `0.3*af_sarah + 0.7*am_adam` are parsed and
-  cached.
-- Important controls include `default_speed`, silence trimming fields, and
-  `debug`.
+  kept in a bounded LRU cache. Formulas must contain finite, non-negative
+  weights and cannot mix language families.
+- Important controls include `default_speed`, silence trimming fields,
+  `max_blended_voice_cache`, and `debug`.
 - Zaphod dev-log benchmarks found Kokoro among the fastest balanced local
   baselines in that environment.
 

@@ -170,6 +170,7 @@ class PocketTTSEngine(BaseEngine):
         max_tokens: int = 50,
         frames_after_eos: Optional[int] = None,
         model_config: Optional[str] = None,
+        language: Optional[str] = None,
         device: str = "cpu",
         voice_cache_dir: Optional[str] = None,
         cache_voice_states: bool = True,
@@ -189,6 +190,9 @@ class PocketTTSEngine(BaseEngine):
             streaming: Whether to use Pocket TTS' streaming generator
             max_tokens: Maximum generation tokens passed to Pocket TTS
             frames_after_eos: Optional trailing frames after EOS for Pocket TTS
+            model_config: Optional explicit Pocket TTS model configuration
+            language: Optional Pocket TTS language configuration. Ignored when
+                model_config is provided. Defaults to Pocket TTS' default.
             device: Torch device for the Pocket TTS model, for example "cpu" or "cuda"
             debug: Enable debug output
         """
@@ -208,6 +212,7 @@ class PocketTTSEngine(BaseEngine):
         self.max_tokens = max_tokens
         self.frames_after_eos = frames_after_eos
         self.model_config = model_config
+        self.language = language
         self.device = device
         self.voice_cache_dir = Path(voice_cache_dir) if voice_cache_dir else None
         self.cache_voice_states = cache_voice_states
@@ -273,11 +278,13 @@ class PocketTTSEngine(BaseEngine):
             if self.debug:
                 print("[PocketTTSEngine] Loading Pocket TTS model...")
 
-            model_config = self.model_config or self._auto_voice_cloning_config()
+            model_config = self.model_config
+            if model_config is None and self.language is None:
+                model_config = self._auto_voice_cloning_config()
             if model_config:
                 self.model = TTSModel.load_model(config=str(model_config))
             else:
-                self.model = TTSModel.load_model()
+                self.model = TTSModel.load_model(language=self.language)
             if self.device:
                 self.model.to(self.device)
             self.sample_rate = self.model.sample_rate

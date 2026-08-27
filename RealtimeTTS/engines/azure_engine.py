@@ -155,6 +155,7 @@ class AzureEngine(BaseEngine):
 
     def post_init(self):
         self.engine_name = "azure"
+        self.provides_word_timings = True
 
     def get_stream_info(self):
         """

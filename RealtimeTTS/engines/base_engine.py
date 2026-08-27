@@ -58,6 +58,10 @@ class BaseEngine(ABC, metaclass=BaseInitMeta):
         # Queue to manage word level timings for the engine.
         self.timings = queue.Queue()
 
+        # Engines that publish accurate native word timings opt in here. This
+        # keeps optional forced alignment from duplicating their callbacks.
+        self.provides_word_timings = False
+
         # Callback to be called when an audio chunk is available.
         self.on_audio_chunk = None
 

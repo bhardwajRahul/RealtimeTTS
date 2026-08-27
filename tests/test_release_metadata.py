@@ -23,7 +23,7 @@ def _version_from_source() -> str:
 
 
 def test_release_version_is_single_source_and_current_candidate():
-    assert _version_from_source() == "0.7.5.dev0"
+    assert _version_from_source() == "0.8.0"
 
     setup_text = (ROOT / "setup.py").read_text(encoding="utf-8")
     assert "_version.py" in setup_text
@@ -115,3 +115,43 @@ assert ModelsLabVoice.__name__ == 'ModelsLabVoice'
 def test_root_exports_modelslab_symbols():
     text = (ROOT / "RealtimeTTS" / "__init__.py").read_text(encoding="utf-8")
     assert '"ModelsLabEngine", "ModelsLabVoice"' in text
+
+
+def test_080_release_components_are_packaged_and_exported():
+    root_exports = (ROOT / "RealtimeTTS" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
+    engine_exports = (ROOT / "RealtimeTTS" / "engines" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
+    setup_text = (ROOT / "setup.py").read_text(encoding="utf-8")
+
+    for source in (
+        ROOT / "RealtimeTTS" / "engines" / "breeze_tts_engine.py",
+        ROOT / "RealtimeTTS" / "engines" / "higgs_engine.py",
+        ROOT / "RealtimeTTS" / "alignment" / "__init__.py",
+    ):
+        assert source.is_file()
+
+    for text in (root_exports, engine_exports):
+        assert '"BreezeTTSEngine", "BreezeTTSVoice"' in text
+        assert '"HiggsEngine", "HiggsVoice"' in text
+
+    assert '"breeze": base_requirements + breeze_requirements' in setup_text
+    assert '"higgs": standard_requirements + higgs_requirements' in setup_text
+    assert '"alignment": standard_requirements + alignment_requirements' in setup_text
+    assert '"omniasr": standard_requirements + omniasr_requirements' in setup_text
+    assert 'python_requires=">=3.10, <3.15"' in setup_text
+
+
+def test_breeze_license_boundary_is_prominent():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    addendum = (ROOT / "LICENSING_ADDENDUM.md").read_text(encoding="utf-8")
+    guide = (ROOT / "docs" / "engines" / "breeze-tts.md").read_text(
+        encoding="utf-8"
+    )
+
+    for text in (readme, addendum, guide):
+        lowered = text.lower()
+        assert "breeze" in lowered
+        assert "non-commercial" in lowered

@@ -31,6 +31,8 @@ __all__ = [
     "SoproTTSEngine", "SoproTTSVoice",
     "SopranoEngine", "SopranoVoice",
     "MossTTSEngine", "MossTTSVoice",
+    "HiggsEngine", "HiggsVoice",
+    "BreezeTTSEngine", "BreezeTTSVoice",
 ]
 
 
@@ -248,6 +250,20 @@ def _load_moss_tts_engine():
     globals()["MossTTSVoice"] = MossTTSVoice
     return MossTTSEngine
 
+
+def _load_higgs_engine():
+    from .higgs_engine import HiggsEngine, HiggsVoice
+    globals()["HiggsEngine"] = HiggsEngine
+    globals()["HiggsVoice"] = HiggsVoice
+    return HiggsEngine
+
+
+def _load_breeze_tts_engine():
+    from .breeze_tts_engine import BreezeTTSEngine, BreezeTTSVoice
+    globals()["BreezeTTSEngine"] = BreezeTTSEngine
+    globals()["BreezeTTSVoice"] = BreezeTTSVoice
+    return BreezeTTSEngine
+
 # Map attribute names to lazy loader functions.
 _lazy_imports = {
     "AzureEngine": _load_azure_engine,
@@ -309,6 +325,10 @@ _lazy_imports = {
     "SopranoVoice": _load_soprano_engine,
     "MossTTSEngine": _load_moss_tts_engine,
     "MossTTSVoice": _load_moss_tts_engine,
+    "HiggsEngine": _load_higgs_engine,
+    "HiggsVoice": _load_higgs_engine,
+    "BreezeTTSEngine": _load_breeze_tts_engine,
+    "BreezeTTSVoice": _load_breeze_tts_engine,
 }
 
 

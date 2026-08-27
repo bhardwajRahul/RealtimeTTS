@@ -56,6 +56,10 @@ Available engine options include:
 - **neutts**: NeuTTS integration
 - **zipvoice**: ZipVoice dependency support
 - **moss**: MOSS-TTS dependency support
+- **higgs**: SGLang-Omni Higgs Audio v3 raw-PCM HTTP streaming integration
+- **breeze**: Experimental Breeze TTS 2 source runtime (non-commercial model)
+- **alignment**: Torchaudio MMS forced character alignment
+- **omniasr**: Experimental omniASR CTC word/character alignment
 - **pockettts**: PocketTTS integration
 - **parler**: Parler TTS integration
 - **styletts**: StyleTTS integration
@@ -220,6 +224,23 @@ moss_requirements = [
     requirements.get("huggingface-hub", "huggingface-hub"),
     requirements.get("nltk", "nltk"),
 ]
+higgs_requirements = requests_requirements
+breeze_requirements = pyaudio_requirements + [
+    'torch==2.9.1; python_version >= "3.10"',
+    'torchaudio==2.9.1; python_version >= "3.10"',
+    'qwen-tts==0.1.1; python_version >= "3.10"',
+    'transformers==4.57.3; python_version >= "3.10"',
+    'accelerate==1.12.0; python_version >= "3.10"',
+    'bitsandbytes>=0.50.1,<0.51; python_version >= "3.10"',
+    requirements.get("numpy", "numpy>=2.0"),
+    requirements.get("soundfile", "soundfile>=0.13.1"),
+    requirements.get("huggingface-hub", "huggingface-hub>=0.36,<1"),
+]
+alignment_requirements = [
+    requirements.get("torch", "torch"),
+    requirements.get("torchaudio", "torchaudio"),
+]
+omniasr_requirements = ["omnilingual-asr", "silero-vad"]
 
 all_engine_requirements = (
     system_requirements
@@ -250,6 +271,8 @@ all_engine_requirements = (
     + styletts_requirements
     + parler_requirements
     + moss_requirements
+    + higgs_requirements
+    + alignment_requirements
 )
 
 extras_require = {
@@ -292,6 +315,13 @@ extras_require = {
     "parler": standard_requirements + parler_requirements,
     "moss": standard_requirements + moss_requirements,
     "moss-tts": standard_requirements + moss_requirements,
+    "higgs": standard_requirements + higgs_requirements,
+    # Breeze pins an isolated CUDA/source-runtime stack and is intentionally
+    # excluded from `all`, where its exact Torch/Transformers pins would make
+    # otherwise unrelated engine combinations difficult to resolve.
+    "breeze": base_requirements + breeze_requirements,
+    "alignment": standard_requirements + alignment_requirements,
+    "omniasr": standard_requirements + omniasr_requirements,
     "piper": standard_requirements,
     # Qwen uses PyAudio for the in-process playback path. The server extra is
     # headless and therefore intentionally leaves PyAudio out.
@@ -309,6 +339,7 @@ setuptools.setup(
     version=current_version,
     author="Kolja Beigel",
     author_email="kolja.beigel@web.de",
+    license="MIT",
     description="Stream text into audio with an easy-to-use, highly configurable library delivering voice output with minimal latency.",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -316,11 +347,15 @@ setuptools.setup(
     packages=setuptools.find_packages(exclude=["tests", "tests.*"]),
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
         "Operating System :: OS Independent",
     ],
     license_files=["LICENSE", "LICENSING_ADDENDUM.md"],
-    python_requires=">=3.9, <3.15",
+    python_requires=">=3.10, <3.15",
     install_requires=base_requirements,
     extras_require=extras_require,
     package_data={"RealtimeTTS": ["engines/*.json"]},

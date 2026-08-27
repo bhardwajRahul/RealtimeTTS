@@ -121,7 +121,7 @@ stream.stop()
 ## Erläuterung der Anforderungen
 
 - **Python Version**:
-  - **Erforderlich**: Python >= 3.9, < 3.13
+  - **Erforderlich**: Python >= 3.10, < 3.15
   - **Grund**: Die Bibliothek hängt von der GitHub-Bibliothek "TTS" von Coqui ab, die Python-Versionen in diesem Bereich erfordert.
 
 - **PyAudio**: zur Erstellung eines Audio-Ausgabestreams

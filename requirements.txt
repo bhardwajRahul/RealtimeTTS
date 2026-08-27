@@ -34,9 +34,8 @@ kokoro>=0.9.4
 # snac is for OrpheusEngine
 snac>=1.2.1
 
-# realtimetts-qwen-native is the native in-process backend for QwenEngine. The
-# validated TestPyPI inventory currently has different candidate versions per
-# supported platform: Windows has dev1 while Linux has dev0.
+# realtimetts-qwen-native is the published native in-process backend for
+# QwenEngine on the supported Windows and Linux targets.
 realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "win32"
 realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "linux"
 

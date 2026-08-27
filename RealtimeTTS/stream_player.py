@@ -656,6 +656,8 @@ class StreamPlayer:
                 logging.info("Immediate stop requested, aborting playback")
                 break
 
+        self.playback_active = False
+
         if self.on_playback_stop:
             self.on_playback_stop()
 
@@ -699,16 +701,32 @@ class StreamPlayer:
             logging.warn("No playback thread found, cannot stop playback")
             return
 
+        immediate_watchdog_fired = False
         if immediate:
             self.immediate_stop.set()
+            wait_start = time.monotonic()
             while self.playback_active:
+                if time.monotonic() - wait_start >= 15.0:
+                    immediate_watchdog_fired = True
+                    logging.critical(
+                        "Immediate playback stop watchdog fired after 15 seconds; "
+                        "forcing cleanup while the playback thread may still be active."
+                    )
+                    break
                 time.sleep(0.001)
-            return
 
         self.playback_active = False
 
         if self.playback_thread and self.playback_thread.is_alive():
-            self.playback_thread.join()
+            if immediate_watchdog_fired:
+                self.playback_thread.join(timeout=1.0)
+                if self.playback_thread.is_alive():
+                    logging.critical(
+                        "Immediate playback stop cleanup is proceeding without a "
+                        "clean playback-thread join."
+                    )
+            else:
+                self.playback_thread.join()
 
         time.sleep(0.001)
 

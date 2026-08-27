@@ -5,8 +5,11 @@ Requires:
   !apt-get -qq -y install espeak-ng
 """
 
+from __future__ import annotations
+
 from .base_engine import BaseEngine, TimingInfo
-from queue import Queue
+from collections import OrderedDict
+from queue import Empty, Queue
 from typing import List, Union
 import numpy as np
 import traceback
@@ -97,7 +100,8 @@ class KokoroEngine(BaseEngine):
             extra_end_ms: int = 15,
             fade_in_ms: int = 10,
             fade_out_ms: int = 10,
-            debug: bool = False):
+            debug: bool = False,
+            max_blended_voice_cache: int = 16):
         """
         Initializes the KokoroEngine with default settings.
 
@@ -106,6 +110,8 @@ class KokoroEngine(BaseEngine):
             default_voice (str): Default voice to use (e.g., "af_heart").
             default_speed (float): Default speed factor for speech synthesis.
             debug (bool): If True, prints detailed debug output.
+            max_blended_voice_cache (int): Maximum number of blended voice
+                formulas to cache. Set to zero to disable the blend cache.
         """
         super().__init__()
         self.debug = debug
@@ -119,6 +125,7 @@ class KokoroEngine(BaseEngine):
         self.extra_end_ms = extra_end_ms
         self.fade_in_ms = fade_in_ms
         self.fade_out_ms = fade_out_ms
+        self.max_blended_voice_cache = max(0, int(max_blended_voice_cache))
 
         self.set_voice(voice)
 
@@ -129,11 +136,15 @@ class KokoroEngine(BaseEngine):
         )
 
         # Cache for formula-based blended voices: { formula_str: torch.FloatTensor }
-        self.blended_voices = {}
+        self.blended_voices = OrderedDict()
 
         if self.debug:
             print(
                 f"[KokoroEngine] Initialized with voice: {self.current_voice} (lang: {self.current_lang}), speed: {self.speed}")
+
+    def post_init(self):
+        self.engine_name = "kokoro"
+        self.provides_word_timings = True
 
     def _get_lang_code_from_voice(self, voice_name: str) -> str:
         """
@@ -219,17 +230,18 @@ class KokoroEngine(BaseEngine):
         if formula in self.blended_voices:
             if self.debug:
                 print(f"[KokoroEngine] Using cached blended voice for formula: {formula}")
-            return self.blended_voices[formula]
+            voice = self.blended_voices[formula]
+            self.blended_voices.move_to_end(formula)
+            return voice
 
         # Otherwise, parse and create a new blend
         # Example formula: "0.3*af_sarah + 0.7*am_adam"
         # Split on "+"
         segments = [seg.strip() for seg in formula.split("+")]
-        total_weight = 0.0
-        sum_tensor = None
+        voice_langs = set()
+        parsed_segments = []
 
         for seg in segments:
-            seg = seg.strip()
             if "*" not in seg:
                 raise ValueError(f"Malformed voice formula segment (missing '*'): '{seg}'")
 
@@ -237,17 +249,34 @@ class KokoroEngine(BaseEngine):
             weight_str, voice_name = seg.split("*", 1)
             weight = float(weight_str.strip())
             voice_name = voice_name.strip()
+            if not np.isfinite(weight) or weight < 0:
+                raise ValueError(
+                    f"Voice weights must be finite and non-negative: '{seg}'"
+                )
+            if not voice_name:
+                raise ValueError(f"Voice name must not be empty: '{seg}'")
+            voice_langs.add(get_lang_code_from_voice(voice_name))
+            parsed_segments.append((weight, voice_name))
+
+        if len(voice_langs) > 1:
+            raise ValueError(
+                f"Mixed-language Kokoro voice formulas are not supported: {formula}"
+            )
+
+        total_weight = 0.0
+        sum_tensor = None
+
+        for weight, voice_name in parsed_segments:
             total_weight += weight
 
             # Load single voice or cached voice
             voice_tensor = pipeline.load_single_voice(voice_name)
 
             # Weighted sum
-            fraction = torch.tensor(weight)  # if you want float conversion
             if sum_tensor is None:
-                sum_tensor = fraction * voice_tensor
+                sum_tensor = weight * voice_tensor
             else:
-                sum_tensor += fraction * voice_tensor
+                sum_tensor += weight * voice_tensor
 
         if total_weight == 0:
             raise ValueError(f"Total voice weight is zero in formula: {formula}")
@@ -256,7 +285,11 @@ class KokoroEngine(BaseEngine):
         sum_tensor /= total_weight
 
         # Cache the final
-        self.blended_voices[formula] = sum_tensor
+        if self.max_blended_voice_cache > 0:
+            self.blended_voices[formula] = sum_tensor
+            self.blended_voices.move_to_end(formula)
+            while len(self.blended_voices) > self.max_blended_voice_cache:
+                self.blended_voices.popitem(last=False)
         return sum_tensor
 
     def get_stream_info(self):
@@ -317,6 +350,7 @@ class KokoroEngine(BaseEngine):
 
         try:
             if generator and generator is not None:
+                emitted_audio = False
                 for index, result in enumerate(generator):
                     graphemes = result.graphemes  # str
                     phonemes = result.phonemes  # str
@@ -376,14 +410,20 @@ class KokoroEngine(BaseEngine):
                         )
                     audio_int16 = (audio_float32 * 32767).astype(np.int16).tobytes()
                     audio_length_in_seconds = len(audio_float32) / 24000
+                    if not audio_int16:
+                        continue
                     self.audio_duration += audio_length_in_seconds
                     self.queue.put(audio_int16)
+                    emitted_audio = True
 
                 if self.debug:
                     duration = time.time() - start_time
                     print(f"[KokoroEngine] Synthesis completed in {duration:.3f}s.")
 
-                return True
+                if emitted_audio:
+                    return True
+                print(f"[KokoroEngine] No audio generated for text: {text}")
+                return False
 
             else:
                 print(f"[KokoroEngine] No generator created for text: {text}")
@@ -401,23 +441,12 @@ class KokoroEngine(BaseEngine):
         Args:
             voice (Union[str, KokoroVoice]): The voice identifier or formula string.
         """
-        self.current_voice = None
         if isinstance(voice, KokoroVoice):
             self.current_voice = voice.name
+            self.current_lang = voice.language_code
         else:
-            installed_voices = self.get_voices()
-            for installed_voice in installed_voices:
-                if voice == installed_voice.name:
-                    self.current_voice = installed_voice
-                    break
-            if self.current_voice is None:
-                for installed_voice in installed_voices:
-                    if voice.lower() in installed_voice.name.lower():
-                        self.current_voice = installed_voice
-            self.current_voice = voice  # Fallback to raw string
-
-        # Attempt to detect language from the first relevant voice chunk
-        self.current_lang = get_lang_code_from_voice(self.current_voice)
+            self.current_voice = str(voice)
+            self.current_lang = get_lang_code_from_voice(self.current_voice)
 
         if self.debug:
             print(f"[KokoroEngine] Voice set to: {self.current_voice} (lang: {self.current_lang})")
@@ -503,6 +532,19 @@ class KokoroEngine(BaseEngine):
         """
         if self.debug:
             print("[KokoroEngine] Shutdown called.")
+
+        self.pipelines.clear()
+        self.blended_voices.clear()
+
+        for audio_queue in (self.queue, self.timings):
+            while True:
+                try:
+                    audio_queue.get_nowait()
+                except Empty:
+                    break
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def set_voice_parameters(self, **voice_parameters):
         """

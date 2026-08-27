@@ -100,6 +100,10 @@ These extras are present in `setup.py`:
 | `styletts`, `style` | StyleTTS Python dependencies; still needs a StyleTTS checkout/assets. |
 | `parler` | PyPI-resolvable Parler support dependencies; install the upstream Parler package separately. |
 | `moss`, `moss-tts` | PyPI-resolvable MOSS runtime dependencies; install MOSS-TTS-Nano/model assets separately. |
+| `higgs` | Requests/PyAudio client for a separately running SGLang-Omni Higgs Audio v3 server. |
+| `breeze` | Isolated Breeze TTS 2 CUDA/source-runtime stack; intentionally excluded from `all`. |
+| `alignment` | Torch/torchaudio MMS forced character alignment. |
+| `omniasr` | Experimental omniASR CTC alignment and Silero VAD dependencies. |
 | `piper` | Core RealtimeTTS dependencies; Piper binary/model assets remain external. |
 | `qwen` | Native in-process qwentts.cpp backend with PyAudio playback (`realtimetts-qwen-native==0.1.0` on supported Windows and Linux targets). |
 | `qwen-server` | OpenAI-compatible HTTP server for the native Qwen backend (same platform-specific native wheel pins, without PyAudio). |
@@ -149,6 +153,8 @@ local checkout, model files, or Docker example.
 | [`SoproTTSEngine`](engines/sopro.md) | `pip install "realtimetts[sopro]"` | Uses `sopro`; optional Hugging Face cache/token and reference WAV. |
 | [`SopranoEngine`](engines/soprano.md) | `pip install "realtimetts[soprano]"` | Uses `soprano-tts`; single-voice English, no cloning. |
 | [`MossTTSEngine`](engines/moss-tts.md) | `pip install "realtimetts[moss]"` or install MOSS-TTS-Nano separately. | Needs MOSS model/runtime assets; ONNX and torch backends have different dependencies. |
+| [`HiggsEngine`](engines/higgs.md) | `pip install "realtimetts[higgs]"` | Run a compatible SGLang-Omni Higgs Audio v3 raw-PCM HTTP server separately. |
+| [`BreezeTTSEngine`](engines/breeze-tts.md) | Install CUDA PyTorch, `pip install "realtimetts[breeze]"`, then check out the documented upstream revision. | Official target is Linux/CUDA. Model weights, derivatives, and self-hosted outputs are research/non-commercial only. |
 
 ## Cloud Credentials
 
@@ -176,7 +182,8 @@ Some engines need tools or assets outside Python packages.
 | `mpv` | Engines that stream compressed audio, including Edge, ElevenLabs, OpenAI MP3, MiniMax, and ModelsLab. | Run `mpv --audio-device=help` to inspect mpv output device names. |
 | `ffmpeg` | Audio conversion workflows through `pydub`. | Install from your OS package manager or ffmpeg.org. |
 | Piper executable and model files | `PiperEngine` | `PIPER_PATH` can point to the executable. |
-| Local model checkouts or Hugging Face assets | Many local neural engines | Needed by engines such as Coqui, Parler, StyleTTS2, ZipVoice, LuxTTS, Sopro, Soprano, and MOSS-TTS. |
+| Local model checkouts or Hugging Face assets | Many local neural engines | Needed by engines such as Coqui, Parler, StyleTTS2, ZipVoice, LuxTTS, Sopro, Soprano, MOSS-TTS, and Breeze. |
+| SoX | Breeze reference-audio preprocessing | Install the external executable; the Python package alone is not sufficient. |
 | CUDA, PyTorch, torchaudio, CUDNN | Local neural engines | Exact requirements vary by engine and model. |
 | NLTK `punkt` and `punkt_tab` data | Sentence splitting around many neural engine tests | Several Zaphod venvs needed local tokenizer data to avoid blocked online lookups. |
 
@@ -196,8 +203,8 @@ are worth checking before choosing an engine:
 - `[all]` is now broader, but it is a best-effort Python dependency set and
   still cannot install OS tools, CUDA builds, local model files, or provider
   accounts.
-- `setup.py` declares Python `>=3.9, <3.15`, while older docs still say
-  `<3.13`.
+- RealtimeTTS declares Python `>=3.10, <3.15`. Windows PyAudio playback is
+  currently limited to Python 3.10-3.13 by available wheels.
 
 ### Build and validate a release
 
@@ -227,50 +234,22 @@ python -m pytest -q \
   tests/test_release_metadata.py
 ```
 
-### TestPyPI candidate installs
+### Candidate wheel installs
 
-Keep dependency resolution on the normal PyPI index while taking the two
-coordinated candidate wheels from TestPyPI. Install the native candidate with
-`--no-deps` first so pip cannot silently select an older incompatible ABI. The
-final command uses the TestPyPI project page only as a find-links source for
-the exact RealtimeTTS candidate:
-
-Choose exactly one native-candidate command for the host platform.
-
-Windows x86-64:
+Test a locally built RealtimeTTS wheel in a fresh environment while resolving
+the published native dependency from PyPI:
 
 ```bash
-python -m pip install --no-deps \
-  --index-url https://test.pypi.org/simple \
+python -m venv .venv-release-check
+python -m pip install --only-binary=:all: \
   "realtimetts-qwen-native[cuda12]==0.1.0"
-```
-
-Linux x86-64:
-
-```bash
-python -m pip install --no-deps \
-  --index-url https://test.pypi.org/simple \
-  "realtimetts-qwen-native[cuda12]==0.1.0"
-```
-
-Then install the shared runtime dependencies and the headless server extra:
-
-```bash
-python -m pip install \
-  --index-url https://pypi.org/simple \
-  "numpy" "huggingface-hub" \
-  "nvidia-cuda-runtime-cu12>=12.8,<13" "nvidia-cublas-cu12>=12.8,<13"
-python -m pip install \
-  --index-url https://pypi.org/simple \
-  --find-links https://test.pypi.org/simple/realtimetts/ \
-  "realtimetts[qwen-server]==0.7.4"
+python -m pip install "dist/realtimetts-0.8.0-py3-none-any.whl[qwen-server]"
 python -m qwentts_cpp doctor
 python -m pip check
 ```
 
-For a non-Qwen candidate, replace the first command with the PyPI extra you
-need and keep the final command pinned to the exact TestPyPI version. Never use
-TestPyPI as the sole index for an install that resolves transitive dependencies.
+Replace the wheel filename with the exact artifact under test. Run the same
+install and native smoke on every advertised operating-system architecture.
 
 See [the source inventory](refactor-source-inventory.md) for the full audit
 notes.
