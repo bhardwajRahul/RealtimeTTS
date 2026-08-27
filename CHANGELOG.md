@@ -4,10 +4,6 @@
 
 ### Added
 
-- Experimental `BreezeTTSEngine` integration for the pinned Breeze TTS 2
-  Linux/CUDA source runtime, including INT8/NF4 loading, reference-guided
-  voices, latency metrics, and a repeatable benchmark tool. Breeze weights,
-  derivatives, and self-hosted outputs remain research/non-commercial.
 - `HiggsEngine`, a small raw-PCM streaming client for separately operated
   SGLang-Omni Higgs Audio v3 servers, with response-header validation and
   fallback-safe failures.
@@ -22,14 +18,10 @@
 ### Changed
 
 - Require Python 3.10 through 3.14 for the core package.
-- Keep Breeze's conflict-prone CUDA stack in an explicit `breeze` extra rather
-  than including it in `all`.
-- Pin the Breeze inference source and model revisions used by the adapter and
-  document the upstream license and platform boundary prominently.
 
 ### Fixed
 
-- Treat empty Breeze, Higgs, and Kokoro synthesis results as failures instead
+- Treat empty Higgs and Kokoro synthesis results as failures instead
   of successful silent output.
 - Prevent late nonblocking alignment results from leaking into a later playback.
 - Make immediate playback stop finish cleanup deterministically after the

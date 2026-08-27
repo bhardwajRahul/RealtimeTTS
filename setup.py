@@ -57,7 +57,6 @@ Available engine options include:
 - **zipvoice**: ZipVoice dependency support
 - **moss**: MOSS-TTS dependency support
 - **higgs**: SGLang-Omni Higgs Audio v3 raw-PCM HTTP streaming integration
-- **breeze**: Experimental Breeze TTS 2 source runtime (non-commercial model)
 - **alignment**: Torchaudio MMS forced character alignment
 - **omniasr**: Experimental omniASR CTC word/character alignment
 - **pockettts**: PocketTTS integration
@@ -225,17 +224,6 @@ moss_requirements = [
     requirements.get("nltk", "nltk"),
 ]
 higgs_requirements = requests_requirements
-breeze_requirements = pyaudio_requirements + [
-    'torch==2.9.1; python_version >= "3.10"',
-    'torchaudio==2.9.1; python_version >= "3.10"',
-    'qwen-tts==0.1.1; python_version >= "3.10"',
-    'transformers==4.57.3; python_version >= "3.10"',
-    'accelerate==1.12.0; python_version >= "3.10"',
-    'bitsandbytes>=0.50.1,<0.51; python_version >= "3.10"',
-    requirements.get("numpy", "numpy>=2.0"),
-    requirements.get("soundfile", "soundfile>=0.13.1"),
-    requirements.get("huggingface-hub", "huggingface-hub>=0.36,<1"),
-]
 alignment_requirements = [
     requirements.get("torch", "torch"),
     requirements.get("torchaudio", "torchaudio"),
@@ -316,10 +304,6 @@ extras_require = {
     "moss": standard_requirements + moss_requirements,
     "moss-tts": standard_requirements + moss_requirements,
     "higgs": standard_requirements + higgs_requirements,
-    # Breeze pins an isolated CUDA/source-runtime stack and is intentionally
-    # excluded from `all`, where its exact Torch/Transformers pins would make
-    # otherwise unrelated engine combinations difficult to resolve.
-    "breeze": base_requirements + breeze_requirements,
     "alignment": standard_requirements + alignment_requirements,
     "omniasr": standard_requirements + omniasr_requirements,
     "piper": standard_requirements,

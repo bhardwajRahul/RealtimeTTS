@@ -82,7 +82,6 @@ nav:
       - Soprano: engines/soprano.md
       - MOSS-TTS: engines/moss-tts.md
       - Higgs Audio v3: engines/higgs.md
-      - Breeze TTS 2: engines/breeze-tts.md
   - Forced Alignment: ctc-forced-alignment.md
   - Feed And Playback: feed-and-playback.md
   - LLM Streaming: llm-streaming.md

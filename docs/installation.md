@@ -101,7 +101,6 @@ These extras are present in `setup.py`:
 | `parler` | PyPI-resolvable Parler support dependencies; install the upstream Parler package separately. |
 | `moss`, `moss-tts` | PyPI-resolvable MOSS runtime dependencies; install MOSS-TTS-Nano/model assets separately. |
 | `higgs` | Requests/PyAudio client for a separately running SGLang-Omni Higgs Audio v3 server. |
-| `breeze` | Isolated Breeze TTS 2 CUDA/source-runtime stack; intentionally excluded from `all`. |
 | `alignment` | Torch/torchaudio MMS forced character alignment. |
 | `omniasr` | Experimental omniASR CTC alignment and Silero VAD dependencies. |
 | `piper` | Core RealtimeTTS dependencies; Piper binary/model assets remain external. |
@@ -154,7 +153,6 @@ local checkout, model files, or Docker example.
 | [`SopranoEngine`](engines/soprano.md) | `pip install "realtimetts[soprano]"` | Uses `soprano-tts`; single-voice English, no cloning. |
 | [`MossTTSEngine`](engines/moss-tts.md) | `pip install "realtimetts[moss]"` or install MOSS-TTS-Nano separately. | Needs MOSS model/runtime assets; ONNX and torch backends have different dependencies. |
 | [`HiggsEngine`](engines/higgs.md) | `pip install "realtimetts[higgs]"` | Run a compatible SGLang-Omni Higgs Audio v3 raw-PCM HTTP server separately. |
-| [`BreezeTTSEngine`](engines/breeze-tts.md) | Install CUDA PyTorch, `pip install "realtimetts[breeze]"`, then check out the documented upstream revision. | Official target is Linux/CUDA. Model weights, derivatives, and self-hosted outputs are research/non-commercial only. |
 
 ## Cloud Credentials
 
@@ -182,8 +180,7 @@ Some engines need tools or assets outside Python packages.
 | `mpv` | Engines that stream compressed audio, including Edge, ElevenLabs, OpenAI MP3, MiniMax, and ModelsLab. | Run `mpv --audio-device=help` to inspect mpv output device names. |
 | `ffmpeg` | Audio conversion workflows through `pydub`. | Install from your OS package manager or ffmpeg.org. |
 | Piper executable and model files | `PiperEngine` | `PIPER_PATH` can point to the executable. |
-| Local model checkouts or Hugging Face assets | Many local neural engines | Needed by engines such as Coqui, Parler, StyleTTS2, ZipVoice, LuxTTS, Sopro, Soprano, MOSS-TTS, and Breeze. |
-| SoX | Breeze reference-audio preprocessing | Install the external executable; the Python package alone is not sufficient. |
+| Local model checkouts or Hugging Face assets | Many local neural engines | Needed by engines such as Coqui, Parler, StyleTTS2, ZipVoice, LuxTTS, Sopro, Soprano, and MOSS-TTS. |
 | CUDA, PyTorch, torchaudio, CUDNN | Local neural engines | Exact requirements vary by engine and model. |
 | NLTK `punkt` and `punkt_tab` data | Sentence splitting around many neural engine tests | Several Zaphod venvs needed local tokenizer data to avoid blocked online lookups. |
 

@@ -64,12 +64,13 @@ def _check_wheel_contents(wheel: Path) -> None:
         "RealtimeTTS/engines/qwen_engine.py",
         "RealtimeTTS/engines/inflect_engine.py",
         "RealtimeTTS/engines/higgs_engine.py",
-        "RealtimeTTS/engines/breeze_tts_engine.py",
         "RealtimeTTS/alignment/__init__.py",
     }
     missing = sorted(required_files - names)
     if missing:
         raise SystemExit(f"wheel is missing required runtime files: {', '.join(missing)}")
+    if "RealtimeTTS/engines/breeze_tts_engine.py" in names:
+        raise SystemExit("wheel unexpectedly contains Breeze, which is excluded from 0.8.0")
     if any(name == "tests" or name.startswith("tests/") or "/tests/" in name for name in names):
         raise SystemExit("wheel unexpectedly contains the test suite")
     dist_info_names = [name for name in names if ".dist-info/" in name]
@@ -120,12 +121,13 @@ def _check_sdist_contents(sdist: Path) -> None:
         "RealtimeTTS/engines/qwen_engine.py",
         "RealtimeTTS/engines/inflect_engine.py",
         "RealtimeTTS/engines/higgs_engine.py",
-        "RealtimeTTS/engines/breeze_tts_engine.py",
         "RealtimeTTS/alignment/__init__.py",
     }
     missing = sorted(required_files - names)
     if missing:
         raise SystemExit(f"sdist is missing required release files: {', '.join(missing)}")
+    if "RealtimeTTS/engines/breeze_tts_engine.py" in names:
+        raise SystemExit("sdist unexpectedly contains Breeze, which is excluded from 0.8.0")
     if any(name == "tests" or name.startswith("tests/") or "/tests/" in name for name in names):
         raise SystemExit("sdist unexpectedly contains the test suite")
     forbidden_suffixes = (
@@ -192,7 +194,8 @@ def main() -> int:
                         "assert RealtimeTTS.__version__",
                         "assert Path(RealtimeTTS.__file__).is_file()",
                         "extras = set(dist.metadata.get_all('Provides-Extra') or [])",
-                        "assert {'qwen-server', 'inflect', 'higgs', 'breeze', 'alignment', 'omniasr'} <= extras",
+                        "assert {'qwen-server', 'inflect', 'higgs', 'alignment', 'omniasr'} <= extras",
+                        "assert 'breeze' not in extras",
                         "assert dist.metadata['Requires-Python'].replace(' ', '') == '>=3.10,<3.15'",
                         "assert any(ep.name == 'realtimetts-qwen-server' for ep in dist.entry_points)",
                         "assert (Path(RealtimeTTS.__file__).parent / '_version.py').is_file()",

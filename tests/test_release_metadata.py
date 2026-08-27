@@ -127,31 +127,37 @@ def test_080_release_components_are_packaged_and_exported():
     setup_text = (ROOT / "setup.py").read_text(encoding="utf-8")
 
     for source in (
-        ROOT / "RealtimeTTS" / "engines" / "breeze_tts_engine.py",
         ROOT / "RealtimeTTS" / "engines" / "higgs_engine.py",
         ROOT / "RealtimeTTS" / "alignment" / "__init__.py",
     ):
         assert source.is_file()
 
     for text in (root_exports, engine_exports):
-        assert '"BreezeTTSEngine", "BreezeTTSVoice"' in text
         assert '"HiggsEngine", "HiggsVoice"' in text
 
-    assert '"breeze": base_requirements + breeze_requirements' in setup_text
     assert '"higgs": standard_requirements + higgs_requirements' in setup_text
     assert '"alignment": standard_requirements + alignment_requirements' in setup_text
     assert '"omniasr": standard_requirements + omniasr_requirements' in setup_text
     assert 'python_requires=">=3.10, <3.15"' in setup_text
 
 
-def test_breeze_license_boundary_is_prominent():
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    addendum = (ROOT / "LICENSING_ADDENDUM.md").read_text(encoding="utf-8")
-    guide = (ROOT / "docs" / "engines" / "breeze-tts.md").read_text(
-        encoding="utf-8"
-    )
+def test_breeze_is_excluded_from_080_release():
+    for path in (
+        ROOT / "RealtimeTTS" / "engines" / "breeze_tts_engine.py",
+        ROOT / "docs" / "engines" / "breeze-tts.md",
+        ROOT / "tools" / "benchmark_breeze_engine.py",
+    ):
+        assert not path.exists()
 
-    for text in (readme, addendum, guide):
-        lowered = text.lower()
-        assert "breeze" in lowered
-        assert "non-commercial" in lowered
+    for path in (
+        ROOT / "README.md",
+        ROOT / "CHANGELOG.md",
+        ROOT / "LICENSING_ADDENDUM.md",
+        ROOT / "mkdocs.yml",
+        ROOT / "setup.py",
+        ROOT / "RealtimeTTS" / "__init__.py",
+        ROOT / "RealtimeTTS" / "engines" / "__init__.py",
+        ROOT / "docs" / "engine-selection.md",
+        ROOT / "docs" / "installation.md",
+    ):
+        assert "breeze" not in path.read_text(encoding="utf-8").lower()
