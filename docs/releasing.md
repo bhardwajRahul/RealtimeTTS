@@ -26,6 +26,7 @@ RealtimeTTS releases promote the exact artifact already exercised by the target 
      --runtime-python <exact-service-venv>/bin/python \
      --dependency realtimetts-qwen-native \
      --runtime-label <service-or-venv> \
+     --service-name wwz-qwen3-tts.service \
      --signer linux-services \
      --signing-key-file /home/lon/.config/codex-release-guard/signing_ed25519 \
      --output <deployment-manifest.json>
