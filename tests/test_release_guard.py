@@ -49,7 +49,7 @@ def _wheel(tmp_path: Path, repo: Path) -> Path:
     version = importlib.metadata.version("pip")
     wheel = tmp_path / f"pip-{version}-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
-        archive.write(repo / "GuardPkg" / "__init__.py", "GuardPkg/__init__.py")
+        archive.writestr("GuardPkg/__init__.py", b"VALUE = 1\r\n")
         archive.writestr(
             f"pip-{version}.dist-info/METADATA",
             f"Metadata-Version: 2.1\nName: pip\nVersion: {version}\n",
@@ -62,9 +62,7 @@ def test_attest_and_verify_require_exact_runtime_and_artifact(tmp_path):
     wheel = _wheel(tmp_path, repo)
     runtime = tmp_path / "runtime" / "GuardPkg"
     runtime.mkdir(parents=True)
-    (runtime / "__init__.py").write_bytes(
-        (repo / "GuardPkg" / "__init__.py").read_bytes()
-    )
+    (runtime / "__init__.py").write_bytes(b"VALUE = 1\r\n")
     manifest = tmp_path / "deployment.json"
 
     attested = _run(

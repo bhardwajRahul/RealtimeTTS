@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 
 SCHEMA_VERSION = 1
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
+TEXT_SUFFIXES = {".cfg", ".ini", ".json", ".md", ".py", ".toml", ".txt", ".yaml", ".yml"}
 
 
 class GuardError(RuntimeError):
@@ -52,6 +53,12 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _content_hash(data: bytes, relative: PurePosixPath, *, canonical_text: bool) -> str:
+    if canonical_text and relative.suffix.lower() in TEXT_SUFFIXES:
+        data = data.replace(b"\r\n", b"\n")
+    return _sha256_bytes(data)
+
+
 def _included(relative: PurePosixPath) -> bool:
     return (
         "__pycache__" not in relative.parts
@@ -59,20 +66,24 @@ def _included(relative: PurePosixPath) -> bool:
     )
 
 
-def _hash_tree(root: Path) -> dict[str, str]:
+def _hash_tree(root: Path, *, canonical_text: bool = False) -> dict[str, str]:
     if not root.is_dir():
         raise GuardError(f"package directory does not exist: {root}")
     files: dict[str, str] = {}
     for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
         relative = PurePosixPath(path.relative_to(root).as_posix())
         if _included(relative):
-            files[str(relative)] = _sha256_file(path)
+            files[str(relative)] = _content_hash(
+                path.read_bytes(), relative, canonical_text=canonical_text
+            )
     if not files:
         raise GuardError(f"package directory contains no releasable files: {root}")
     return files
 
 
-def _wheel_package_hashes(wheel: Path, package_dir: str) -> dict[str, str]:
+def _wheel_package_hashes(
+    wheel: Path, package_dir: str, *, canonical_text: bool = False
+) -> dict[str, str]:
     prefix = package_dir.strip("/") + "/"
     files: dict[str, str] = {}
     with zipfile.ZipFile(wheel) as archive:
@@ -81,7 +92,9 @@ def _wheel_package_hashes(wheel: Path, package_dir: str) -> dict[str, str]:
                 continue
             relative = PurePosixPath(info.filename[len(prefix) :])
             if _included(relative):
-                files[str(relative)] = _sha256_bytes(archive.read(info))
+                files[str(relative)] = _content_hash(
+                    archive.read(info), relative, canonical_text=canonical_text
+                )
     if not files:
         raise GuardError(f"wheel {wheel.name} does not contain package {package_dir!r}")
     return files
@@ -230,10 +243,13 @@ def command_attest(args: argparse.Namespace) -> dict[str, object]:
     wheel = args.wheel.resolve()
     artifacts = [wheel, *(path.resolve() for path in args.artifact)]
     checked = _assert_clean_worktrees(repo)
-    source_files = _hash_tree(repo / args.package_dir)
+    source_files = _hash_tree(repo / args.package_dir, canonical_text=True)
+    wheel_source_files = _wheel_package_hashes(
+        wheel, args.package_dir, canonical_text=True
+    )
     wheel_files = _wheel_package_hashes(wheel, args.package_dir)
     runtime_files = _hash_tree(args.runtime_package_dir.resolve())
-    _assert_same_files(source_files, wheel_files, "source package and wheel")
+    _assert_same_files(source_files, wheel_source_files, "source package and wheel")
     _assert_same_files(wheel_files, runtime_files, "deployed runtime and wheel")
 
     metadata = _wheel_metadata(wheel)
@@ -281,9 +297,12 @@ def command_verify(args: argparse.Namespace) -> dict[str, object]:
     if manifest.get("package_dir") != args.package_dir:
         raise GuardError("publication blocked: package directory differs from deployment manifest")
 
-    source_files = _hash_tree(repo / args.package_dir)
+    source_files = _hash_tree(repo / args.package_dir, canonical_text=True)
+    wheel_source_files = _wheel_package_hashes(
+        wheel, args.package_dir, canonical_text=True
+    )
     wheel_files = _wheel_package_hashes(wheel, args.package_dir)
-    _assert_same_files(source_files, wheel_files, "source package and wheel")
+    _assert_same_files(source_files, wheel_source_files, "source package and wheel")
     runtime_files = manifest.get("runtime_files")
     if not isinstance(runtime_files, dict) or not all(
         isinstance(key, str) and isinstance(value, str) for key, value in runtime_files.items()
