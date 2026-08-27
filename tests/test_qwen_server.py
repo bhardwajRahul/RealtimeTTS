@@ -766,6 +766,56 @@ def test_startup_warmup_prepares_persistent_voice_without_queue_leaks(tmp_path):
         assert response.content == engine.silent + engine.audible
 
 
+def test_startup_warmup_prepares_all_language_routes_once_before_ready(tmp_path):
+    class Detector:
+        def warmup(self, _text):
+            return self.detect("Detector warmup text.")
+
+        def detect(self, _text):
+            return LanguageDetection("english", "en", 0.99, 0.01)
+
+    class RecordingWarmupEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.warmup_history = []
+
+        def warmup(self):
+            self.warmup_history.append(
+                (self.current_voice.name, self.current_voice.language)
+            )
+            super().warmup()
+
+    for name in ("mira_de", "mira_en"):
+        _persist_voice(tmp_path, name=name)
+    engine = RecordingWarmupEngine()
+    response_queue = engine.queue
+    router = QwenLanguageRouter(
+        Detector(),
+        voice_routes={
+            "mira": {"de": "mira_de", "en": "mira_en"},
+            "backup": {"en": "mira_en"},
+        },
+    )
+    server = _server(
+        tmp_path,
+        engine,
+        language_router=router,
+        startup_warmup_voice="mira_en",
+    )
+
+    with TestClient(create_app(server)) as client:
+        assert client.get("/ready").status_code == 200
+        assert engine.warmup_history == [
+            ("mira_de", "german"),
+            ("mira_en", "english"),
+        ]
+        assert engine.warmup_calls == 2
+        assert engine.queue is response_queue
+        assert response_queue.empty()
+        server.startup()
+        assert engine.warmup_calls == 2
+
+
 def test_startup_warmup_fails_before_ready_when_voice_is_missing(tmp_path):
     engine = FakeEngine()
     server = _server(tmp_path, engine, startup_warmup_voice="missing")
@@ -795,6 +845,11 @@ def test_startup_warmup_cli_is_opt_in():
     )
 
     assert defaults.startup_warmup_voice is None
+    assert defaults.startup_warmup_routes is True
+    assert (
+        parser.parse_args(["--no-startup-warmup-routes"]).startup_warmup_routes
+        is False
+    )
     assert defaults.startup_warmup_tokens == 32
     assert defaults.fragment_lookahead_words == 0
     assert defaults.clamp_fp16 is True

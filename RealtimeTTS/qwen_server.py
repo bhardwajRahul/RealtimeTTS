@@ -620,6 +620,7 @@ class QwenHttpServer:
         language: str = "auto",
         voice_dir: Path,
         startup_warmup_voice: Optional[str] = None,
+        startup_warmup_routes: bool = True,
         stall_timeout_seconds: float = DEFAULT_STALL_TIMEOUT_SECONDS,
         synthesis_timeout_seconds: float = DEFAULT_SYNTHESIS_TIMEOUT_SECONDS,
         shutdown_timeout_seconds: float = DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
@@ -643,6 +644,7 @@ class QwenHttpServer:
         )
         if startup_warmup_voice is not None and not self.startup_warmup_voice:
             raise ValueError("startup_warmup_voice must not be empty")
+        self.startup_warmup_routes = bool(startup_warmup_routes)
         if synthesis_timeout_seconds <= 0:
             raise ValueError("synthesis_timeout_seconds must be positive")
         if shutdown_timeout_seconds <= 0:
@@ -701,27 +703,37 @@ class QwenHttpServer:
         }
 
     def startup(self) -> None:
-        """Prepare the configured persistent voice before the app becomes ready."""
+        """Prepare configured persistent voices before the app becomes ready."""
 
         with self._startup_lock:
             if self._startup_complete:
                 return
+            warmup_targets: list[tuple[str, str]] = []
             if self.language_router is not None:
                 started = time.monotonic()
                 self.language_router.warmup()
                 for base_voice, routes in self.language_router.voice_routes.items():
-                    for route_voice in routes.values():
+                    for route_language, route_voice in routes.items():
                         if self.registry.get(route_voice) is None:
                             raise RuntimeError(
                                 f"language route {base_voice!r} targets unknown voice "
                                 f"{route_voice!r}"
                             )
+                        target = (route_voice, route_language)
+                        if self.startup_warmup_routes and target not in warmup_targets:
+                            warmup_targets.append(target)
                 LOGGER.info(
                     "Warmed local language detector in %.1f ms",
                     (time.monotonic() - started) * 1000.0,
                 )
             if self.startup_warmup_voice is not None:
-                self.warmup_voice(self.startup_warmup_voice)
+                if not any(
+                    voice == self.startup_warmup_voice
+                    for voice, _language in warmup_targets
+                ):
+                    warmup_targets.append((self.startup_warmup_voice, self.language))
+            for voice, language in warmup_targets:
+                self.warmup_voice(voice, language=language)
             self._startup_complete = True
 
     def is_ready(self) -> bool:
@@ -823,8 +835,15 @@ class QwenHttpServer:
             state.timed_out = True
         self._abort_state(state, "timeout_error", "synthesis timed out", 504)
 
-    def warmup_voice(self, name: str) -> None:
+    def warmup_voice(self, name: str, *, language: Optional[str] = None) -> None:
         voice_name = str(name).strip()
+        voice_language = (
+            self.language
+            if language is None
+            else str(language).strip().lower()
+        )
+        if not voice_language:
+            raise ValueError("startup warmup language must not be empty")
         record = self.registry.get(voice_name)
         if record is None:
             raise RuntimeError(
@@ -838,13 +857,14 @@ class QwenHttpServer:
             original_queue = self.engine.queue
             self.engine.queue = _DiscardQueue()
             try:
-                self.engine.set_voice(self.registry.to_voice(record, self.language))
+                self.engine.set_voice(self.registry.to_voice(record, voice_language))
                 self.engine.warmup()
             finally:
                 self.engine.queue = original_queue
         LOGGER.info(
-            "Warmed persistent Qwen voice %r in %.1f ms",
+            "Warmed persistent Qwen voice %r for language %s in %.1f ms",
             voice_name,
+            voice_language,
             (time.monotonic() - started) * 1000.0,
         )
 
@@ -2026,6 +2046,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Registered persistent voice to prepare and warm before the server becomes ready",
     )
     parser.add_argument(
+        "--startup-warmup-routes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Prepare and warm every configured --voice-language-route target before "
+            "the server becomes ready (default: enabled)"
+        ),
+    )
+    parser.add_argument(
         "--startup-warmup-text",
         default="Warm up the speech engine.",
         help="Hidden synthesis text used by --startup-warmup-voice",
@@ -2224,6 +2253,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         language=args.lang,
         voice_dir=args.voice_dir,
         startup_warmup_voice=args.startup_warmup_voice,
+        startup_warmup_routes=args.startup_warmup_routes,
         stall_timeout_seconds=args.stall_timeout,
         synthesis_timeout_seconds=args.synthesis_timeout,
         shutdown_timeout_seconds=args.shutdown_timeout,

@@ -498,7 +498,6 @@ class QwenEngine(BaseEngine):
             "quant": self.quant,
             "native_abi": self.native_abi_version,
             "native_version": self.native_version,
-            "binding_version": self.binding_version,
             "model_source": self._model_source_identity(),
         }
 

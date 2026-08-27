@@ -208,6 +208,37 @@ def test_generated_voice_cache_is_atomic_and_content_versioned(tmp_path, monkeyp
     third.shutdown()
 
 
+def test_generated_voice_cache_survives_binding_package_version_change(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        qwen_module,
+        "_load_reference_audio",
+        lambda _path: np.array([0.0, 0.1, -0.1], dtype=np.float32),
+    )
+    wav = _reference_file(tmp_path)
+    first_backend = FakeBackend()
+    first = _engine(tmp_path, first_backend)
+    first.binding_version = "old-python-binding"
+    first.set_voice(QwenVoice("mira", ref_audio=wav, ref_text="hello"))
+    assert first_backend.extract_calls == 1
+    first.shutdown()
+
+    second_backend = FakeBackend()
+    second = _engine(tmp_path, second_backend)
+    second.binding_version = "new-python-binding"
+    second.set_voice(QwenVoice("mira", ref_audio=wav, ref_text="hello"))
+
+    assert second_backend.extract_calls == 0
+    assert second_backend.load_calls == 1
+    metadata_files = list((tmp_path / "voice-cache").rglob("*.json"))
+    assert len(metadata_files) == 1
+    assert "binding_version" not in json.loads(
+        metadata_files[0].read_text(encoding="utf-8")
+    )
+    second.shutdown()
+
+
 def test_voice_cache_lock_serializes_competing_writers(tmp_path, monkeypatch):
     monkeypatch.setattr(
         qwen_module,

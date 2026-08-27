@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.1 - 2026-08-27
+
+### Fixed
+
+- Warm every configured Qwen language-route voice before the server becomes
+  ready, with the route's actual synthesis language and without duplicate work.
+- Keep compatible generated Qwen voice caches across Python binding package
+  version changes; native ABI/version and model identities remain part of the
+  cache contract.
+
+### Release process
+
+- Require an exact deployed-wheel attestation before publication and block
+  releases when any linked worktree contains uncommitted changes.
+
 ## 0.8.0 - 2026-08-27
 
 ### Added
