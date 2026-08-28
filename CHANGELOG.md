@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.2 - 2026-08-28
+
+### Fixed
+
+- Smooth long Qwen fragment boundaries by retaining and fading the final 15 ms
+  after the first second of audio without delaying startup or short fragments.
+- Add configurable 150 ms mid-sentence and 300 ms sentence-ending pauses to
+  Qwen WebSocket text streaming.
+- Reduce the Qwen silence-trim onset fade from 20 ms to 15 ms.
+
+### Release process
+
+- Harden deployed-runtime attestations, service verification, path
+  normalization, and remote release-ref validation.
+
 ## 0.8.1 - 2026-08-27
 
 ### Fixed
