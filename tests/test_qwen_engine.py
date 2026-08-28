@@ -375,7 +375,9 @@ def test_streaming_start_trim_uses_subframe_preroll_and_fade_in(tmp_path, monkey
         assert audio[0] == 0
         assert np.max(np.abs(np.diff(audio.astype(np.int32)))) < 16000
         assert np.max(np.abs(audio)) > 10000
-        assert profile["startup_fade_samples"] == 480
+        assert profile["startup_fade_samples"] == 360
+        assert profile["ending_fade_samples"] == 360
+        assert audio[-1] == 0
         assert profile["n_samples"] == audio.size
     finally:
         engine.shutdown()
@@ -405,7 +407,42 @@ def test_streaming_start_accumulates_a_safe_first_chunk_then_streams(tmp_path, m
         assert engine.last_synthesis_profile["first_chunk_duration_ms"] == pytest.approx(
             first_ms
         )
+        assert engine.last_synthesis_profile["ending_fade_samples"] == 0
+        assert queued[-1][-1] != 0
         assert sum(len(chunk) for chunk in queued) == 20 * 240
+    finally:
+        engine.shutdown()
+
+
+def test_fragment_fade_out_starts_only_after_configured_audio_duration(tmp_path, monkeypatch):
+    """The first second streams without a retained tail; longer audio fades at the end."""
+    monkeypatch.setattr(
+        qwen_module,
+        "_load_reference_audio",
+        lambda _path: np.array([0.0, 0.1], dtype=np.float32),
+    )
+    backend = SequenceBackend([np.full(2400, 0.25, dtype=np.float32) for _ in range(11)])
+    engine = _engine(
+        tmp_path,
+        backend,
+        voice=QwenVoice("voice", ref_audio=_reference_file(tmp_path)),
+        startup_buffer_ms=0,
+    )
+    try:
+        assert engine.synthesize("long enough") is True
+        queued = []
+        while not engine.queue.empty():
+            queued.append(np.frombuffer(engine.queue.get_nowait(), dtype="<i2").copy())
+        profile = engine.last_synthesis_profile
+
+        assert sum(len(chunk) for chunk in queued) == 11 * 2400
+        assert sum(len(chunk) for chunk in queued[:-2]) == 24000
+        assert len(queued[-2]) == 2040
+        assert len(queued[-1]) == 360
+        assert queued[-1][0] != 0
+        assert queued[-1][-1] == 0
+        assert profile["ending_fade_samples"] == 360
+        assert profile["ending_fade_after_ms"] == 1000.0
     finally:
         engine.shutdown()
 

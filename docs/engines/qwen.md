@@ -73,17 +73,19 @@ increase end-to-end time. Use the benchmark in this guide on the actual target
 system.
 
 Leading-silence trimming is enabled by default. It finds the first audible
-5 ms window, keeps 15 ms of pre-roll before it, and applies a 20 ms fade at the
+5 ms window, keeps 15 ms of pre-roll before it, and applies a 15 ms fade at the
 new boundary. The engine accumulates at least 160 ms of real audio before
 publishing the first chunk, preventing immediate-play underruns after making
 the first native frame shorter. That 160 ms is audio duration, not wall-clock
 waiting time; the GPU generates it faster than real time. Later native chunks
-are published immediately.
+are published immediately. Once a fragment has produced 1000 ms, the engine
+retains only its final 15 ms and fades that tail to zero; shorter fragments are
+sent without a fade-out so this protection adds no startup latency.
 Short utterances are flushed in full even when they never reach 160 ms. Use
 `QwenEngine(trim_silence=False)` to preserve the native PCM, set
 `startup_buffer_ms=0` to disable startup accumulation, or tune
-`silence_threshold`, `trim_pre_roll_ms`, and `trim_fade_in_ms` for unusual
-material.
+`silence_threshold`, `trim_pre_roll_ms`, `trim_fade_in_ms`, and
+`fragment_fade_out_after_ms` for unusual material.
 
 ## Release status and installation
 
@@ -430,10 +432,14 @@ obtain the necessary rights for every voice, reference recording, and generated
 voice latent before deployment.
 
 The server uses the same safe streaming-start defaults as the local engine:
-15 ms onset pre-roll, a 20 ms boundary fade, and at least 160 ms in its first
+15 ms onset pre-roll, a 15 ms boundary fade, and at least 160 ms in its first
 PCM response chunk. Configure these with `--trim-pre-roll-ms`,
-`--trim-fade-in-ms`, and `--startup-buffer-ms`; use `--no-trim-silence` or
-`--startup-buffer-ms 0` only when comparing raw native output or latency.
+`--trim-fade-in-ms`, `--fragment-fade-out-after-ms`, and
+`--startup-buffer-ms`; use `--no-trim-silence` or `--startup-buffer-ms 0` only
+when comparing raw native output or latency. WebSocket text streaming also
+uses RealtimeTTS punctuation pauses by default: 0.15 seconds after commas and
+other mid-sentence delimiters, and 0.30 seconds after sentence endings. Tune
+them with `--comma-silence-duration` and `--sentence-silence-duration`.
 
 ### Automatic language and reference routing
 

@@ -294,7 +294,8 @@ class QwenEngine(BaseEngine):
         trim_silence: bool = True,
         silence_threshold: float = 0.005,
         trim_pre_roll_ms: float = 15.0,
-        trim_fade_in_ms: float = 20.0,
+        trim_fade_in_ms: float = 15.0,
+        fragment_fade_out_after_ms: float = 1000.0,
         startup_buffer_ms: float = 160.0,
         backend_factory: Optional[Callable[..., Any]] = None,
     ) -> None:
@@ -307,9 +308,14 @@ class QwenEngine(BaseEngine):
             raise ValueError("max_new_tokens and warmup_tokens must be positive")
         if silence_threshold < 0:
             raise ValueError("silence_threshold must not be negative")
-        if trim_pre_roll_ms < 0 or trim_fade_in_ms < 0 or startup_buffer_ms < 0:
+        if (
+            trim_pre_roll_ms < 0
+            or trim_fade_in_ms < 0
+            or fragment_fade_out_after_ms < 0
+            or startup_buffer_ms < 0
+        ):
             raise ValueError(
-                "trim_pre_roll_ms, trim_fade_in_ms, and startup_buffer_ms must not be negative"
+                "silence trimming, fragment fade, and startup buffer values must not be negative"
             )
         if bool(talker_path) != bool(codec_path):
             raise ValueError("talker_path and codec_path must be supplied together")
@@ -342,6 +348,7 @@ class QwenEngine(BaseEngine):
         self.silence_threshold = float(silence_threshold)
         self.trim_pre_roll_ms = float(trim_pre_roll_ms)
         self.trim_fade_in_ms = float(trim_fade_in_ms)
+        self.fragment_fade_out_after_ms = float(fragment_fade_out_after_ms)
         self.startup_buffer_ms = float(startup_buffer_ms)
 
         self.seed = int(seed)
@@ -706,14 +713,21 @@ class QwenEngine(BaseEngine):
             startup_audio: list[np.ndarray] = []
             startup_samples = 0
             startup_emitted = False
-            startup_target_samples = int(round(self.startup_buffer_ms * SAMPLE_RATE / 1000))
             pre_roll_samples = int(round(self.trim_pre_roll_ms * SAMPLE_RATE / 1000))
             fade_in_samples = int(round(self.trim_fade_in_ms * SAMPLE_RATE / 1000))
+            ending_fade_samples = fade_in_samples if self.trim_silence else 0
+            ending_fade_after_samples = int(
+                round(self.fragment_fade_out_after_ms * SAMPLE_RATE / 1000)
+            )
+            startup_target_samples = int(round(self.startup_buffer_ms * SAMPLE_RATE / 1000))
             trim_window_samples = self._silence_trim_window_samples(SAMPLE_RATE)
             quiet_tail = np.empty(0, dtype=np.float32)
             search_remainder = np.empty(0, dtype=np.float32)
             leading_trimmed_samples = 0
             startup_fade_samples = 0
+            ending_fade_applied_samples = 0
+            ending_audio = np.empty(0, dtype=np.float32)
+            ending_fade_input_samples = 0
             callback_profile: dict[str, Any] = {}
             stream = None
 
@@ -741,17 +755,63 @@ class QwenEngine(BaseEngine):
                 )
                 n_samples += chunk_samples
 
+            def publish_with_ending_fade(audio: np.ndarray) -> None:
+                nonlocal ending_audio, ending_fade_input_samples
+                if audio.size == 0:
+                    return
+                if ending_fade_samples <= 0:
+                    publish_audio(audio)
+                    return
+                if ending_fade_input_samples < ending_fade_after_samples:
+                    immediate_samples = min(
+                        int(audio.size),
+                        ending_fade_after_samples - ending_fade_input_samples,
+                    )
+                    if immediate_samples:
+                        publish_audio(audio[:immediate_samples])
+                        ending_fade_input_samples += immediate_samples
+                        audio = audio[immediate_samples:]
+                    if audio.size == 0:
+                        return
+                combined = (
+                    audio
+                    if ending_audio.size == 0
+                    else np.concatenate((ending_audio, audio))
+                )
+                if combined.size <= ending_fade_samples:
+                    ending_audio = combined
+                    return
+                split = int(combined.size) - ending_fade_samples
+                publish_audio(combined[:split])
+                ending_audio = combined[split:].copy()
+
+            def publish_startup_audio(audio: np.ndarray) -> None:
+                nonlocal startup_fade_samples
+                if (
+                    self.trim_silence
+                    and startup_fade_samples == 0
+                    and fade_in_samples > 0
+                    and audio.size > 0
+                ):
+                    startup_fade_samples = min(fade_in_samples, int(audio.size))
+                    audio = self.apply_fade_in(
+                        audio,
+                        SAMPLE_RATE,
+                        int(round(self.trim_fade_in_ms)),
+                    )
+                publish_with_ending_fade(audio)
+
             def buffer_or_publish(audio: np.ndarray) -> None:
                 nonlocal startup_samples, startup_emitted
                 if audio.size == 0:
                     return
                 if startup_emitted:
-                    publish_audio(audio)
+                    publish_with_ending_fade(audio)
                     return
                 startup_audio.append(audio)
                 startup_samples += int(audio.size)
                 if startup_target_samples == 0 or startup_samples >= startup_target_samples:
-                    publish_audio(np.concatenate(startup_audio))
+                    publish_startup_audio(np.concatenate(startup_audio))
                     startup_audio.clear()
                     startup_samples = 0
                     startup_emitted = True
@@ -844,10 +904,24 @@ class QwenEngine(BaseEngine):
                 if startup_audio and not (
                     cancel_event.cancelled() or self.stop_synthesis_event.is_set()
                 ):
-                    publish_audio(np.concatenate(startup_audio))
+                    publish_startup_audio(np.concatenate(startup_audio))
                     startup_audio.clear()
                     startup_samples = 0
                     startup_emitted = True
+                if ending_audio.size and not (
+                    cancel_event.cancelled() or self.stop_synthesis_event.is_set()
+                ):
+                    ending_fade_applied_samples = min(
+                        ending_fade_samples, int(ending_audio.size)
+                    )
+                    publish_audio(
+                        self.apply_fade_out(
+                            ending_audio,
+                            SAMPLE_RATE,
+                            int(round(self.trim_fade_in_ms)),
+                        )
+                    )
+                    ending_audio = np.empty(0, dtype=np.float32)
                 callback_profile = dict(getattr(self._backend, "last_stream_profile", None) or {})
                 margins = [
                     item["playout_margin_before_ms"]
@@ -866,6 +940,8 @@ class QwenEngine(BaseEngine):
                     "startup_buffered_ms": (
                         queued_chunks[0]["duration_ms"] if queued_chunks else None
                     ),
+                    "ending_fade_samples": ending_fade_applied_samples,
+                    "ending_fade_after_ms": self.fragment_fade_out_after_ms,
                     "startup_target_ms": self.startup_buffer_ms,
                     "startup_fade_samples": startup_fade_samples,
                     "native_peak": native_peak,

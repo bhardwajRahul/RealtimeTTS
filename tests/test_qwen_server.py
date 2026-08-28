@@ -856,7 +856,10 @@ def test_startup_warmup_cli_is_opt_in():
     assert defaults.trim_silence is True
     assert defaults.silence_threshold == 0.005
     assert defaults.trim_pre_roll_ms == 15.0
-    assert defaults.trim_fade_in_ms == 20.0
+    assert defaults.trim_fade_in_ms == 15.0
+    assert defaults.fragment_fade_out_after_ms == 1000.0
+    assert defaults.comma_silence_duration == 0.15
+    assert defaults.sentence_silence_duration == 0.30
     assert defaults.startup_buffer_ms == 160.0
     assert configured.startup_warmup_voice == "mira"
     assert configured.startup_warmup_text == "Short warmup."
@@ -1110,6 +1113,49 @@ def test_stream_fragment_lookahead_prefers_sentence_end_then_comma(tmp_path):
         "Freut mich,",
         "dass Sie sich nach so langer Zeit wieder einmal hier einfinden.",
     ]
+
+
+def test_stream_inserts_configured_silence_after_comma_and_sentence(tmp_path, monkeypatch):
+    async def punctuation_fragments(source, **_kwargs):
+        async for _chunk in source:
+            pass
+        yield "Hello,"
+        yield "world."
+
+    monkeypatch.setattr(
+        qwen_server_module, "generate_sentences_async", punctuation_fragments
+    )
+    server = _server(
+        tmp_path,
+        comma_silence_duration=0.15,
+        sentence_silence_duration=0.30,
+    )
+
+    binary_sizes = []
+    with TestClient(create_app(server)) as client:
+        _register(client)
+        with client.websocket_connect("/v1/audio/speech-stream") as websocket:
+            websocket.send_json(
+                {
+                    "type": "config",
+                    "voice": "mira",
+                    "language": "English",
+                    "response_format": "pcm",
+                }
+            )
+            websocket.send_json({"type": "text", "text": "Hello, world."})
+            websocket.send_json({"type": "end"})
+            while True:
+                message = websocket.receive()
+                if message.get("bytes") is not None:
+                    binary_sizes.append(len(message["bytes"]))
+                    continue
+                event = json.loads(message["text"])
+                assert event["type"] != "error", event
+                if event["type"] == "done":
+                    break
+
+    assert binary_sizes == [32, 128, 7200, 32, 128, 14400]
 
 
 def test_stream_lookahead_reclassifies_then_locks_german_for_the_response(

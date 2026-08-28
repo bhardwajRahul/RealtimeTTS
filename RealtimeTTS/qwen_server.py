@@ -92,6 +92,8 @@ AUDIO_METADATA = {
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _STREAM_END = object()
 _TEXT_END = object()
+_END_SENTENCE_DELIMITERS = ".!?。！？…"
+_MID_SENTENCE_DELIMITERS = ";:,\n()[]{}-“”„”—/|《》"
 LANGUAGE_LOOKAHEAD_MAX_ADDITIONAL_WORDS = 3
 _NO_FORCED_FIRST_FRAGMENT = float("inf")
 _QWEN_TO_TOKENIZER_LANGUAGE = {
@@ -633,6 +635,8 @@ class QwenHttpServer:
         clock: Callable[[], float] = time.monotonic,
         language_router: Optional[QwenLanguageRouter] = None,
         fragment_lookahead_words: int = 0,
+        comma_silence_duration: float = 0.15,
+        sentence_silence_duration: float = 0.30,
     ) -> None:
         self.engine = engine
         self.alias = str(alias).strip()
@@ -661,6 +665,8 @@ class QwenHttpServer:
             raise ValueError("max_output_bytes must be positive")
         if fragment_lookahead_words < 0:
             raise ValueError("fragment_lookahead_words must not be negative")
+        if comma_silence_duration < 0 or sentence_silence_duration < 0:
+            raise ValueError("punctuation silence durations must not be negative")
         self.registry = VoiceRegistry(voice_dir)
         self.metrics = RequestMetrics(stall_timeout_seconds, clock)
         self.language_router = language_router
@@ -671,6 +677,8 @@ class QwenHttpServer:
         self.output_queue_chunks = int(output_queue_chunks)
         self.max_output_bytes = int(max_output_bytes)
         self.fragment_lookahead_words = int(fragment_lookahead_words)
+        self.comma_silence_duration = float(comma_silence_duration)
+        self.sentence_silence_duration = float(sentence_silence_duration)
         self.api_key = str(api_key) if api_key else None
         configured_origins = DEFAULT_CORS_ORIGINS if cors_origins is None else cors_origins
         self.cors_origins = tuple(str(origin).strip() for origin in configured_origins if str(origin).strip())
@@ -701,6 +709,17 @@ class QwenHttpServer:
             )
             if hasattr(engine, name)
         }
+
+    def fragment_silence_duration(self, text: str) -> float:
+        """Return the configured pause after one synthesized text fragment."""
+        stripped = text.strip()
+        if not stripped:
+            return 0.0
+        if stripped[-1] in _END_SENTENCE_DELIMITERS:
+            return self.sentence_silence_duration
+        if stripped[-1] in _MID_SENTENCE_DELIMITERS:
+            return self.comma_silence_duration
+        return 0.0
 
     def startup(self) -> None:
         """Prepare configured persistent voices before the app becomes ready."""
@@ -1412,6 +1431,35 @@ async def _send_stream_pcm(
         )
 
 
+async def _send_stream_silence(
+    websocket: Any,
+    duration: float,
+    *,
+    cancelled: asyncio.Event,
+    resumed: asyncio.Event,
+    send_lock: asyncio.Lock,
+) -> None:
+    silent_frames = int(SAMPLE_RATE * duration)
+    if silent_frames <= 0:
+        return
+    silence = b"\0" * (
+        silent_frames
+        * int(AUDIO_METADATA["channels"])
+        * int(AUDIO_METADATA["bits_per_sample"])
+        // 8
+    )
+    while not cancelled.is_set():
+        if not await _wait_until_stream_resumed(resumed, cancelled):
+            return
+        async with send_lock:
+            if not resumed.is_set():
+                continue
+            if cancelled.is_set():
+                return
+            await websocket.send_bytes(silence)
+            return
+
+
 def create_app(server: QwenHttpServer) -> Any:
     if FastAPI is None:  # pragma: no cover - guarded by qwen-server extra
         raise ImportError(
@@ -1907,6 +1955,13 @@ def create_app(server: QwenHttpServer) -> Any:
                     resumed=stream_resumed,
                     send_lock=send_lock,
                 )
+                await _send_stream_silence(
+                    websocket,
+                    server.fragment_silence_duration(text),
+                    cancelled=cancelled,
+                    resumed=stream_resumed,
+                    send_lock=send_lock,
+                )
                 current_state[0] = None
             # Terminal commit point: after all synthesis/PCM has completed,
             # stop accepting controls and emit done. A cancel processed before
@@ -2087,7 +2142,25 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--silence-threshold", type=float, default=0.005)
     parser.add_argument("--trim-pre-roll-ms", type=float, default=15.0)
-    parser.add_argument("--trim-fade-in-ms", type=float, default=20.0)
+    parser.add_argument("--trim-fade-in-ms", type=float, default=15.0)
+    parser.add_argument(
+        "--fragment-fade-out-after-ms",
+        type=float,
+        default=1000.0,
+        help="Stream this much fragment audio before retaining the final fade-out tail",
+    )
+    parser.add_argument(
+        "--comma-silence-duration",
+        type=float,
+        default=0.15,
+        help="Silence in seconds after a comma or other mid-sentence delimiter",
+    )
+    parser.add_argument(
+        "--sentence-silence-duration",
+        type=float,
+        default=0.30,
+        help="Silence in seconds after a sentence-ending delimiter",
+    )
     parser.add_argument(
         "--startup-buffer-ms",
         type=float,
@@ -2190,7 +2263,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         args.silence_threshold < 0
         or args.trim_pre_roll_ms < 0
         or args.trim_fade_in_ms < 0
+        or args.fragment_fade_out_after_ms < 0
         or args.startup_buffer_ms < 0
+        or args.comma_silence_duration < 0
+        or args.sentence_silence_duration < 0
     ):
         parser.error("silence trimming and startup buffer values must not be negative")
     if any(str(origin).strip() == "*" for origin in (args.cors_origin or [])):
@@ -2236,6 +2312,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         silence_threshold=args.silence_threshold,
         trim_pre_roll_ms=args.trim_pre_roll_ms,
         trim_fade_in_ms=args.trim_fade_in_ms,
+        fragment_fade_out_after_ms=args.fragment_fade_out_after_ms,
         startup_buffer_ms=args.startup_buffer_ms,
         warmup=False,
         warmup_text=args.startup_warmup_text,
@@ -2265,6 +2342,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         cors_origins=args.cors_origin,
         language_router=language_router,
         fragment_lookahead_words=args.fragment_lookahead_words,
+        comma_silence_duration=args.comma_silence_duration,
+        sentence_silence_duration=args.sentence_silence_duration,
     )
     LOGGER.info(
         "Loaded RealtimeTTS QwenEngine (native=%s, ABI=%s); listening on %s:%s",
