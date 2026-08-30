@@ -2086,7 +2086,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--language-id-model",
         type=Path,
-        help="Local fastText lid.176.ftz model used when language is Auto",
+        help=(
+            "Local fastText language-ID model used when language is Auto; "
+            "lid.176.bin is recommended, while compressed lid.176.ftz is supported"
+        ),
     )
     parser.add_argument(
         "--voice-language-route",
@@ -2236,6 +2239,15 @@ def _validate_bind_security(
         )
 
 
+def _warn_for_compressed_language_id_model(model_path: Optional[Path]) -> None:
+    if model_path is not None and model_path.suffix.lower() == ".ftz":
+        LOGGER.warning(
+            "Compressed fastText language-ID model %s selected; use the full "
+            "lid.176.bin model for production routing accuracy and speed",
+            model_path,
+        )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = build_argument_parser()
     args = parser.parse_args(argv)
@@ -2289,6 +2301,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    _warn_for_compressed_language_id_model(args.language_id_model)
     try:
         import uvicorn
     except ImportError as exc:  # pragma: no cover - guarded by installation extra

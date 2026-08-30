@@ -188,7 +188,10 @@ def language_lookahead_wait_ms(detection: LanguageDetection) -> Optional[float]:
 
 
 class FastTextLanguageDetector:
-    """Lazy, reusable wrapper around a local ``lid.176.ftz`` model.
+    """Lazy, reusable wrapper around a local fastText ``lid.176`` model.
+
+    The full ``lid.176.bin`` model is recommended for production routing.
+    The compressed ``lid.176.ftz`` model remains supported.
 
     The normal production construction is ``FastTextLanguageDetector(path)``.
     ``model`` and ``model_loader`` are injectable so unit tests and embedders
@@ -266,7 +269,8 @@ class FastTextLanguageDetector:
                 except ImportError as exc:  # pragma: no cover - exercised by integration users
                     raise ImportError(
                         "FastTextLanguageDetector requires the optional 'fasttext' package; "
-                        "install it and provide a local lid.176.ftz model"
+                        "install it and provide a local lid.176.bin model "
+                        "(recommended; compressed lid.176.ftz is also supported)"
                     ) from exc
                 self._model_loader = fasttext.load_model
             if self.model_path is None:

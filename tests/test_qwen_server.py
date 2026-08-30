@@ -6,6 +6,7 @@ import queue
 import threading
 import time
 import wave
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -19,6 +20,7 @@ from RealtimeTTS.qwen_server import (
     SpeechRequest,
     VoiceRegistry,
     _resolve_api_key,
+    _warn_for_compressed_language_id_model,
     _validate_bind_security,
     build_argument_parser,
     create_app,
@@ -314,6 +316,17 @@ def test_api_key_cors_and_lan_bind_defaults_are_restrictive(tmp_path, monkeypatc
         assert "access-control-allow-origin" not in client.get(
             "/health", headers={"Origin": "http://evil.example"}
         ).headers
+
+
+def test_compressed_language_id_model_emits_production_warning(caplog):
+    with caplog.at_level("WARNING", logger=qwen_server_module.__name__):
+        _warn_for_compressed_language_id_model(Path("lid.176.ftz"))
+        _warn_for_compressed_language_id_model(Path("lid.176.bin"))
+        _warn_for_compressed_language_id_model(None)
+
+    assert len(caplog.records) == 1
+    assert "lid.176.bin" in caplog.text
+    assert "accuracy and speed" in caplog.text
 
 
 def test_shared_qwen_engine_rejects_multiple_active_workers_and_bounds_queue(tmp_path):

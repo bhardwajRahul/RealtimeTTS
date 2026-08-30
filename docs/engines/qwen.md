@@ -451,13 +451,16 @@ registered reference voice:
 realtimetts-qwen-server \
   ... \
   --lang Auto \
-  --language-id-model /models/fasttext/lid.176.ftz \
+  --language-id-model /models/fasttext/lid.176.bin \
   --voice-language-route mira:de=mira_de \
   --voice-language-route mira:en=mira
 ```
 
-`lid.176.ftz` must already exist locally; the server never downloads a model
-while handling a request. Explicit request languages such as `German` or
+Use the full `lid.176.bin` model for production routing. The compressed
+`lid.176.ftz` model remains supported for storage-constrained deployments, but
+fastText documents the full model as faster and slightly more accurate. The
+selected model must already exist locally; the server never downloads one while
+handling a request. Explicit request languages such as `German` or
 `English` bypass detection but still select their configured reference. The
 detector accepts only sufficiently long, sufficiently scored, well-separated results;
 ambiguous short fragments use the detector's configured fallback. Without

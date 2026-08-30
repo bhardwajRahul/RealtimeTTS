@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.3 - 2026-08-30
+
+### Fixed
+
+- Recommend the full fastText `lid.176.bin` model for production automatic
+  language and reference-voice routing while retaining compressed `.ftz`
+  compatibility with an explicit startup warning.
+
 ## 0.8.2 - 2026-08-28
 
 ### Fixed
