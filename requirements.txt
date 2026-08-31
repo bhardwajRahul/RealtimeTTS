@@ -36,8 +36,8 @@ snac>=1.2.1
 
 # realtimetts-qwen-native is the published native in-process backend for
 # QwenEngine on the supported Windows and Linux targets.
-realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "win32"
-realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "linux"
+realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "win32"
+realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "linux"
 
 # HTTP serving dependencies for the optional native Qwen server
 fastapi>=0.115,<1

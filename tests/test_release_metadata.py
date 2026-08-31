@@ -23,7 +23,7 @@ def _version_from_source() -> str:
 
 
 def test_release_version_is_single_source_and_current_candidate():
-    assert _version_from_source() == "0.8.3"
+    assert _version_from_source() == "0.8.4"
 
     setup_text = (ROOT / "setup.py").read_text(encoding="utf-8")
     assert "_version.py" in setup_text
@@ -54,8 +54,8 @@ def test_qwen_native_candidates_keep_validated_platform_pins():
     setup_text = (ROOT / "setup.py").read_text(encoding="utf-8")
     requirements_text = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     expected = {
-        'realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "win32"',
-        'realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "linux"',
+        'realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "win32"',
+        'realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "linux"',
     }
 
     assert expected <= set(

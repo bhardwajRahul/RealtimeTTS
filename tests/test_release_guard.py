@@ -84,6 +84,10 @@ class ReleaseGuardTests(unittest.TestCase):
 
         sdist = root / "demo_distribution-1.0.tar.gz"
         with tarfile.open(sdist, "w:gz") as archive:
+            metadata = b"Name: demo-distribution\nVersion: 1.0\n"
+            metadata_info = tarfile.TarInfo("demo_distribution-1.0/PKG-INFO")
+            metadata_info.size = len(metadata)
+            archive.addfile(metadata_info, io.BytesIO(metadata))
             for package in ("demo_pkg", "demo_server"):
                 data = self._package_bytes(package)
                 info = tarfile.TarInfo(
@@ -365,6 +369,19 @@ class ReleaseGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(release_guard.GuardError, "stay inside"):
                 release_guard._repo_member(repo, "../outside", "source package")
 
+        native = release_guard.COMPONENT_PROFILES["RealtimeTTSQwenNative"]
+        self.assertEqual(native["distribution"], "realtimetts-qwen-native")
+        self.assertEqual(
+            native["required_wheel_platforms"],
+            (
+                "manylinux_2_35_x86_64",
+                "manylinux_2_35_aarch64",
+                "win_amd64",
+            ),
+        )
+        self.assertFalse(native["publish_sdist"])
+        self.assertEqual(native["binary_package_prefixes"], {"qwentts_cpp": ("lib/",)})
+
     def test_component_signer_key_fingerprint_is_pinned(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -493,6 +510,158 @@ class ReleaseGuardTests(unittest.TestCase):
                 "",
                 1,
             )
+
+    def test_native_platform_wheels_require_exact_python_source_parity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "src" / "qwentts_cpp"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("VERSION = '0.2.0'\n", encoding="utf-8")
+            (package / "lib").mkdir()
+            (package / "lib" / ".gitkeep").write_bytes(b"")
+
+            platforms = (
+                "manylinux_2_35_x86_64",
+                "manylinux_2_35_aarch64",
+                "win_amd64",
+            )
+            wheels = []
+            for platform_tag in platforms:
+                wheel = root / (
+                    "realtimetts_qwen_native-0.2.0-py3-none-"
+                    f"{platform_tag}.whl"
+                )
+                with zipfile.ZipFile(wheel, "w") as archive:
+                    archive.writestr(
+                        "qwentts_cpp/__init__.py", "VERSION = '0.2.0'\r\n"
+                    )
+                    if platform_tag.startswith("manylinux"):
+                        archive.writestr(
+                            "qwentts_cpp/lib/libqwen.so", b"b91bca4-native"
+                        )
+                        archive.writestr(
+                            "qwentts_cpp/lib/libggml-cuda.so.0", b"cuda"
+                        )
+                    else:
+                        archive.writestr(
+                            "qwentts_cpp/lib/qwen.dll", b"b91bca4-native"
+                        )
+                        archive.writestr(
+                            "qwentts_cpp/lib/ggml-cuda.dll", b"cuda"
+                        )
+                    archive.writestr(
+                        "realtimetts_qwen_native-0.2.0.dist-info/METADATA",
+                        "Name: realtimetts-qwen-native\nVersion: 0.2.0\n",
+                    )
+                    archive.writestr(
+                        "realtimetts_qwen_native-0.2.0.dist-info/WHEEL",
+                        f"Wheel-Version: 1.0\nTag: py3-none-{platform_tag}\n",
+                    )
+                wheels.append(wheel)
+
+            profile = release_guard.COMPONENT_PROFILES["RealtimeTTSQwenNative"]
+            metadata = release_guard._wheel_metadata(wheels[0])
+            specs = [
+                {
+                    "package_dir": "qwentts_cpp",
+                    "source_package_dir": "src/qwentts_cpp",
+                    "runtime_module": "qwentts_cpp",
+                }
+            ]
+            release_guard._validate_platform_wheels(
+                profile, metadata, wheels[0], wheels[1:], root, specs
+            )
+
+            original_windows = wheels[2].read_bytes()
+            with zipfile.ZipFile(wheels[2], "w") as archive:
+                archive.writestr(
+                    "qwentts_cpp/__init__.py", "VERSION = '0.2.0'\r\n"
+                )
+                archive.writestr(
+                    "qwentts_cpp/lib/qwen.dll", b"b91bca4-native"
+                )
+                archive.writestr(
+                    "realtimetts_qwen_native-0.2.0.dist-info/METADATA",
+                    "Name: realtimetts-qwen-native\nVersion: 0.2.0\n",
+                )
+                archive.writestr(
+                    "realtimetts_qwen_native-0.2.0.dist-info/WHEEL",
+                    "Wheel-Version: 1.0\nTag: py3-none-win_amd64\n",
+                )
+            with self.assertRaisesRegex(
+                release_guard.GuardError, "lacks required native library"
+            ):
+                release_guard._validate_platform_wheels(
+                    profile, metadata, wheels[0], wheels[1:], root, specs
+                )
+            wheels[2].write_bytes(original_windows)
+
+            with self.assertRaisesRegex(
+                release_guard.GuardError, "platform set is not exact"
+            ):
+                release_guard._validate_platform_wheels(
+                    profile, metadata, wheels[0], wheels[1:2], root, specs
+                )
+
+            wheel = wheels[0]
+            sdist = root / "release.tar.gz"
+            extra = wheels[1:]
+            self.assertEqual(
+                release_guard._publication_artifacts(profile, wheel, sdist, extra),
+                [wheel, *extra],
+            )
+            self.assertEqual(
+                release_guard._publication_artifacts(
+                    release_guard.COMPONENT_PROFILES["RealtimeTTS"],
+                    wheel,
+                    sdist,
+                    extra,
+                ),
+                [wheel, sdist, *extra],
+            )
+
+    def test_sdist_name_and_version_must_match_wheel(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self._init_repo(root)
+            wheel, sdist = self._write_artifacts(root)
+            specs = [
+                {
+                    "package_dir": "demo_pkg",
+                    "source_package_dir": "demo_pkg",
+                    "runtime_module": "demo_pkg",
+                },
+                {
+                    "package_dir": "demo_server",
+                    "source_package_dir": "src/demo_server",
+                    "runtime_module": "demo_server",
+                },
+            ]
+            release_guard._validate_package_artifacts(
+                repo,
+                wheel,
+                sdist,
+                specs,
+                None,
+                release_guard.COMPONENT_PROFILES["demo"],
+            )
+
+            with tarfile.open(sdist, "w:gz") as archive:
+                metadata = b"Name: demo-distribution\nVersion: 2.0\n"
+                info = tarfile.TarInfo("demo_distribution-2.0/PKG-INFO")
+                info.size = len(metadata)
+                archive.addfile(info, io.BytesIO(metadata))
+            with self.assertRaisesRegex(
+                release_guard.GuardError, "name/version metadata differ"
+            ):
+                release_guard._validate_package_artifacts(
+                    repo,
+                    wheel,
+                    sdist,
+                    specs,
+                    None,
+                    release_guard.COMPONENT_PROFILES["demo"],
+                )
 
 
 if __name__ == "__main__":

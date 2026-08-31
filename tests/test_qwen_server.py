@@ -854,6 +854,8 @@ def test_startup_warmup_cli_is_opt_in():
             "8",
             "--fragment-lookahead-words",
             "8",
+            "--onset-silence-profile",
+            "qwen3_tts_12hz_0_6b_base_q8_v1",
         ]
     )
 
@@ -874,10 +876,12 @@ def test_startup_warmup_cli_is_opt_in():
     assert defaults.comma_silence_duration == 0.15
     assert defaults.sentence_silence_duration == 0.30
     assert defaults.startup_buffer_ms == 160.0
+    assert defaults.onset_silence_profile == "off"
     assert configured.startup_warmup_voice == "mira"
     assert configured.startup_warmup_text == "Short warmup."
     assert configured.startup_warmup_tokens == 8
     assert configured.fragment_lookahead_words == 8
+    assert configured.onset_silence_profile == "qwen3_tts_12hz_0_6b_base_q8_v1"
     assert parser.parse_args(["--no-clamp-fp16"]).clamp_fp16 is False
     assert parser.parse_args(["--no-trim-silence"]).trim_silence is False
 

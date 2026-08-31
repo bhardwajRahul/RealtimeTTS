@@ -22,10 +22,11 @@ from .base_engine import BaseEngine
 
 
 SAMPLE_RATE = 24_000
-REQUIRED_QWENTTS_ABI = 4
+REQUIRED_QWENTTS_ABI = 5
 VOICE_CACHE_FORMAT = 1
 DEFAULT_MODEL = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
 DEFAULT_QUANT = "Q8_0"
+DEFAULT_ONSET_SILENCE_PROFILE = "off"
 
 
 def _normalize_quant(quant: str) -> str:
@@ -297,6 +298,7 @@ class QwenEngine(BaseEngine):
         trim_fade_in_ms: float = 15.0,
         fragment_fade_out_after_ms: float = 1000.0,
         startup_buffer_ms: float = 160.0,
+        onset_silence_profile: str = DEFAULT_ONSET_SILENCE_PROFILE,
         backend_factory: Optional[Callable[..., Any]] = None,
     ) -> None:
         super().__init__()
@@ -350,6 +352,9 @@ class QwenEngine(BaseEngine):
         self.trim_fade_in_ms = float(trim_fade_in_ms)
         self.fragment_fade_out_after_ms = float(fragment_fade_out_after_ms)
         self.startup_buffer_ms = float(startup_buffer_ms)
+        self.onset_silence_profile = str(
+            onset_silence_profile or DEFAULT_ONSET_SILENCE_PROFILE
+        ).strip().lower()
 
         self.seed = int(seed)
         self.max_new_tokens = int(max_new_tokens)
@@ -390,6 +395,25 @@ class QwenEngine(BaseEngine):
                 f"{REQUIRED_QWENTTS_ABI} is required. Reinstall realtimetts[qwen] "
                 "and run `python -m qwentts_cpp doctor`."
             )
+        if self.onset_silence_profile != DEFAULT_ONSET_SILENCE_PROFILE:
+            validator = getattr(
+                self._backend, "validate_onset_silence_profile", None
+            )
+            if not callable(validator):
+                self._backend.close()
+                raise QwenEngineError(
+                    "The installed native Qwen binding does not support onset "
+                    "silence profiles. Reinstall realtimetts[qwen]."
+                )
+            try:
+                self.onset_silence_profile = str(
+                    validator(self.onset_silence_profile)
+                )
+            except BaseException as exc:
+                self._backend.close()
+                raise self._translate_error(
+                    exc, "validating the onset silence profile"
+                ) from exc
         if voice is not None:
             try:
                 self.set_voice(voice)
@@ -628,6 +652,11 @@ class QwenEngine(BaseEngine):
             "ref_spk_emb": self._voice_ref.ref_spk_emb,
             "ref_codes": self._voice_ref.ref_codes if use_icl else None,
             "ref_text": voice.ref_text if use_icl else None,
+            "onset_silence_profile": (
+                DEFAULT_ONSET_SILENCE_PROFILE
+                if use_icl
+                else self.onset_silence_profile
+            ),
             "seed": self.seed,
             "max_new_tokens": int(max_new_tokens or self.max_new_tokens),
             "do_sample": self.do_sample,

@@ -87,6 +87,25 @@ Short utterances are flushed in full even when they never reach 160 ms. Use
 `silence_threshold`, `trim_pre_roll_ms`, `trim_fade_in_ms`, and
 `fragment_fade_out_after_ms` for unusual material.
 
+### Optional generated-onset suppression
+
+For the exact Qwen3-TTS 12Hz 0.6B Base Q8 model/codec pair validated by the
+native package, x-vector voices can opt into request-local suppression of
+known silent c0 candidates during the first three generated codec frames:
+
+```python
+engine = QwenEngine(
+    voice=voice,
+    onset_silence_profile="qwen3_tts_12hz_0_6b_base_q8_v1",
+)
+```
+
+The default is `"off"`. The profile is checkpoint-specific, not
+Mira-specific: the native binding verifies the exact talker and codec hashes
+before enabling it. Full ICL voices remain unmodified even when the engine is
+configured with a profile. This prevents silent frames from being generated;
+it is distinct from the downstream PCM silence trim and startup buffer.
+
 ## Release status and installation
 
 Qwen support is a coordinated release of `RealtimeTTS` and the distinct
@@ -94,7 +113,7 @@ Qwen support is a coordinated release of `RealtimeTTS` and the distinct
 upstream `qwentts-cpp-python` binding and `qwentts.cpp` runtime under a
 RealtimeTTS-owned PyPI name. Its Python import remains `qwentts_cpp`.
 
-RealtimeTTS 0.7.4 requires `realtimetts-qwen-native==0.1.0` with C ABI 4.
+RealtimeTTS 0.8.4 requires `realtimetts-qwen-native==0.2.0` with C ABI 5.
 Validated CUDA 12.8 (`1cu128`) wheels are provided for Windows and Linux
 x86-64. Other operating systems are not supported release targets.
 
@@ -118,7 +137,7 @@ path) so pip cannot silently select a different public version:
 
 ```bash
 python -m pip install --find-links /absolute/path/to/native-wheelhouse \
-  "realtimetts-qwen-native[cuda12]==0.1.0"
+  "realtimetts-qwen-native[cuda12]==0.2.0"
 python -m pip install --find-links /absolute/path/to/native-wheelhouse \
   "realtimetts[qwen] @ file:///absolute/path/to/realtimetts-wheel.whl"
 python -m qwentts_cpp doctor
@@ -154,9 +173,9 @@ when local Windows playback requires PyAudio.
 
 | Platform | Status/requirement |
 | --- | --- |
-| Windows 10/11 x86-64 | `realtimetts-qwen-native==0.1.0`, `1cu128`, `py3-none-win_amd64`; AVX2/FMA/F16C/BMI2 CPU; NVIDIA GPU with compute capability 7.5 or newer; CUDA-12-compatible driver. This is the primary Windows release target. |
-| Linux x86-64 | `realtimetts-qwen-native==0.1.0`, `1cu128`, `py3-none-manylinux_2_35_x86_64`; glibc 2.35 or newer (Ubuntu 22.04/24.04); AVX2/FMA/F16C/BMI2 CPU; NVIDIA GPU with compute capability 7.5 or newer. This is the primary Linux release target. |
-| Linux AArch64 | `py3-none-manylinux_2_35_aarch64` when a matching artifact is published; secondary/target-dependent, not guaranteed by every RealtimeTTS release. |
+| Windows 10/11 x86-64 | `realtimetts-qwen-native==0.2.0`, `1cu128`, `py3-none-win_amd64`; AVX2/FMA/F16C/BMI2 CPU; NVIDIA GPU with compute capability 7.5 or newer; CUDA-12-compatible driver. This is the primary Windows release target. |
+| Linux x86-64 | `realtimetts-qwen-native==0.2.0`, `1cu128`, `py3-none-manylinux_2_35_x86_64`; glibc 2.35 or newer (Ubuntu 22.04/24.04); AVX2/FMA/F16C/BMI2 CPU; NVIDIA GPU with compute capability 7.5 or newer. This is the primary Linux release target. |
+| Linux AArch64 | `realtimetts-qwen-native==0.2.0`, `py3-none-manylinux_2_35_aarch64`; built and hash-verified as a required 0.2.0 release artifact. Runtime model acceptance remains focused on the production Linux x86-64 host. |
 | Linux CPU | A locally built `manylinux` wheel is possible, but CPU realtime performance is not a supported release guarantee. |
 | macOS / Apple Silicon | No supported prebuilt wheel. `qwentts.cpp` itself has a Metal backend, but the Python wheel helper has no `metal` backend and its macOS library-copy list does not include `libggml-metal.dylib`; the route below is an unverified CPU-only experiment. |
 | CUDA | The default published CUDA wheel is built with CUDA 12.8. The `[cuda12]` extra supplies NVIDIA's `nvidia-cuda-runtime-cu12` and `nvidia-cublas-cu12` packages (`>=12.8,<13`); a compatible NVIDIA driver is still required. |
@@ -184,12 +203,12 @@ substitute for the single default backend flavor published to PyPI.
 Use the upstream [`qwentts-cpp-python`](https://github.com/andimarafioti/qwentts-cpp-python)
 `scripts/build_native.py` helper. Run these commands from that repository, and
 keep build output outside its checkout. The wrapper checks the native header
-before CMake starts; use the ABI-4 qwentts.cpp revision tested by the matching
-release (currently `7b6ed4f6db964c14fd3ac36c1ca13f1ce6150f4e`):
+before CMake starts; use the ABI-5 qwentts.cpp revision tested by the matching
+release (currently `b91bca43f9adc5df839161ce4c88b0f6743b27ff`):
 
 ```bash
-git clone --recursive https://github.com/ServeurpersoCom/qwentts.cpp /path/to/qwentts.cpp
-git -C /path/to/qwentts.cpp checkout 7b6ed4f6db964c14fd3ac36c1ca13f1ce6150f4e
+git clone --recursive https://github.com/KoljaB/qwentts.cpp /path/to/qwentts.cpp
+git -C /path/to/qwentts.cpp checkout b91bca43f9adc5df839161ce4c88b0f6743b27ff
 git -C /path/to/qwentts.cpp submodule update --init --recursive
 ```
 
@@ -317,15 +336,15 @@ python -m venv /path/to/fresh-venv
 # Windows x86-64 CUDA wheel:
 /path/to/fresh-venv/bin/python -m pip install \
   --find-links /path/to/wheelhouse \
-  "realtimetts-qwen-native[cuda12]==0.1.0"
+  "realtimetts-qwen-native[cuda12]==0.2.0"
 # Linux x86-64 CUDA wheel (use this line instead on Linux):
 /path/to/fresh-venv/bin/python -m pip install \
   --find-links /path/to/wheelhouse \
-  "realtimetts-qwen-native[cuda12]==0.1.0"
+  "realtimetts-qwen-native[cuda12]==0.2.0"
 # Linux CPU or macOS CPU wheel (use this line instead of the CUDA line above):
 /path/to/fresh-venv/bin/python -m pip install \
   --find-links /path/to/wheelhouse \
-  "realtimetts-qwen-native==0.1.0"
+  "realtimetts-qwen-native==0.2.0"
 /path/to/fresh-venv/bin/python -c \
   "from qwentts_cpp import QwenLibrary, QT_ABI_VERSION; print(QwenLibrary().version(), QT_ABI_VERSION)"
 ```

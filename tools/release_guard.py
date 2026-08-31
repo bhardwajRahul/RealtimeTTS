@@ -53,6 +53,44 @@ COMPONENT_PROFILES: dict[str, dict[str, object]] = {
         "service_name": "wwz-qwen3-tts.service",
         "publishable": True,
     },
+    "RealtimeTTSQwenNative": {
+        "distribution": "realtimetts-qwen-native",
+        "packages": (("qwentts_cpp", "src/qwentts_cpp", "qwentts_cpp"),),
+        "signer": "linux-services",
+        "signer_fingerprint": "SHA256:ODuksd5J17paccWV+N0zWfczcc1iV30V5mQytjiar2w",
+        "remote_repository": "github.com/koljab/realtimetts-qwen-native",
+        "remote_branch": "main",
+        "service_required": True,
+        "service_name": "wwz-qwen3-tts.service",
+        "publishable": True,
+        # Native libraries are platform-generated. Python sources must match
+        # every wheel and the sdist; the deployed runtime must match the full
+        # Linux x86-64 wheel, including its shared libraries.
+        "binary_package_prefixes": {"qwentts_cpp": ("lib/",)},
+        "required_wheel_platforms": (
+            "manylinux_2_35_x86_64",
+            "manylinux_2_35_aarch64",
+            "win_amd64",
+        ),
+        "native_revision": "b91bca43f9adc5df839161ce4c88b0f6743b27ff",
+        "required_native_library_groups": {
+            "manylinux_2_35_x86_64": (
+                ("qwentts_cpp/lib/libqwen.so",),
+                ("qwentts_cpp/lib/libggml-cuda.so.0",),
+            ),
+            "manylinux_2_35_aarch64": (
+                ("qwentts_cpp/lib/libqwen.so",),
+                ("qwentts_cpp/lib/libggml-cuda.so.0",),
+            ),
+            "win_amd64": (
+                ("qwentts_cpp/lib/qwen.dll", "qwentts_cpp/lib/libqwen.dll"),
+                ("qwentts_cpp/lib/ggml-cuda.dll",),
+            ),
+        },
+        # The sdist is retained in signed parity evidence but is intentionally
+        # not published because it cannot build the native runtime by itself.
+        "publish_sdist": False,
+    },
     "RealtimeSTT": {
         "distribution": "realtimestt",
         "packages": (
@@ -242,6 +280,46 @@ def _wheel_metadata(wheel: Path) -> dict[str, str]:
             result["version"] = line[9:].strip()
     if not result.get("name") or not result.get("version"):
         raise GuardError(f"wheel metadata lacks Name or Version: {wheel}")
+    return result
+
+
+def _wheel_tags(wheel: Path) -> set[str]:
+    with zipfile.ZipFile(wheel) as archive:
+        names = [
+            name for name in archive.namelist() if name.endswith(".dist-info/WHEEL")
+        ]
+        if len(names) != 1:
+            raise GuardError(f"wheel must contain exactly one WHEEL file: {wheel}")
+        content = archive.read(names[0]).decode("utf-8", errors="strict")
+    tags = {line[5:].strip() for line in content.splitlines() if line.startswith("Tag: ")}
+    if not tags:
+        raise GuardError(f"wheel metadata lacks a compatibility Tag: {wheel}")
+    return tags
+
+
+def _sdist_metadata(sdist: Path) -> dict[str, str]:
+    with tarfile.open(sdist, "r:*") as archive:
+        members = [
+            member
+            for member in archive.getmembers()
+            if member.isfile()
+            and len(PurePosixPath(member.name).parts) == 2
+            and PurePosixPath(member.name).name == "PKG-INFO"
+        ]
+        if len(members) != 1:
+            raise GuardError(f"sdist must contain exactly one PKG-INFO file: {sdist}")
+        stream = archive.extractfile(members[0])
+        if stream is None:
+            raise GuardError(f"cannot read sdist metadata: {sdist}")
+        content = stream.read().decode("utf-8", errors="strict")
+    result: dict[str, str] = {}
+    for line in content.splitlines():
+        if line.startswith("Name: ") and "name" not in result:
+            result["name"] = line[6:].strip()
+        elif line.startswith("Version: ") and "version" not in result:
+            result["version"] = line[9:].strip()
+    if not result.get("name") or not result.get("version"):
+        raise GuardError(f"sdist metadata lacks Name or Version: {sdist}")
     return result
 
 
@@ -1018,7 +1096,34 @@ def _validate_package_artifacts(
     sdist: Path,
     specs: list[dict[str, str]],
     runtime_state: dict[str, object] | None,
+    profile: dict[str, object],
 ) -> None:
+    wheel_metadata = _wheel_metadata(wheel)
+    sdist_metadata = _sdist_metadata(sdist)
+    if (
+        _canonical_distribution(wheel_metadata["name"])
+        != _canonical_distribution(sdist_metadata["name"])
+        or wheel_metadata["version"] != sdist_metadata["version"]
+    ):
+        raise GuardError("wheel and sdist name/version metadata differ")
+    if profile.get("native_revision"):
+        with tarfile.open(sdist, "r:*") as archive:
+            native_members = [
+                member.name
+                for member in archive.getmembers()
+                if member.isfile()
+                and (
+                    PurePosixPath(member.name).name.lower().endswith((".dll", ".dylib"))
+                    or ".so" in PurePosixPath(member.name).name.lower()
+                )
+            ]
+        if native_members:
+            raise GuardError(
+                f"native sdist must not contain shared libraries: {native_members!r}"
+            )
+    binary_prefixes = profile.get("binary_package_prefixes", {})
+    if not isinstance(binary_prefixes, dict):
+        raise GuardError("component binary-package exclusions are invalid")
     runtime_files = runtime_state.get("package_files") if runtime_state else None
     for spec in specs:
         package_dir = spec["package_dir"]
@@ -1034,6 +1139,26 @@ def _validate_package_artifacts(
             sdist, package_dir, canonical_text=True
         )
         wheel_files = _wheel_package_hashes(wheel, package_dir)
+        excluded = binary_prefixes.get(package_dir, ())
+        if not isinstance(excluded, tuple) or not all(
+            isinstance(prefix, str) and prefix for prefix in excluded
+        ):
+            raise GuardError("component binary-package exclusions are invalid")
+        source_files = {
+            name: digest
+            for name, digest in source_files.items()
+            if not any(name.startswith(prefix) for prefix in excluded)
+        }
+        wheel_source_files = {
+            name: digest
+            for name, digest in wheel_source_files.items()
+            if not any(name.startswith(prefix) for prefix in excluded)
+        }
+        sdist_source_files = {
+            name: digest
+            for name, digest in sdist_source_files.items()
+            if not any(name.startswith(prefix) for prefix in excluded)
+        }
         _assert_same_files(
             source_files, wheel_source_files, f"source package {package_dir} and wheel"
         )
@@ -1052,6 +1177,100 @@ def _validate_package_artifacts(
                 current,
                 f"deployed runtime package {package_dir} and wheel",
             )
+
+
+def _validate_platform_wheels(
+    profile: dict[str, object],
+    metadata: dict[str, str],
+    wheel: Path,
+    extra_artifacts: list[Path],
+    repo: Path,
+    specs: list[dict[str, str]],
+) -> None:
+    required = profile.get("required_wheel_platforms")
+    if required is None:
+        return
+    if not isinstance(required, tuple) or not all(
+        isinstance(item, str) for item in required
+    ):
+        raise GuardError("component required wheel platforms are invalid")
+    wheels = [wheel, *extra_artifacts]
+    if any(path.suffix != ".whl" for path in wheels):
+        raise GuardError("native release artifacts must all be wheels")
+    actual: set[str] = set()
+    binary_prefixes = profile.get("binary_package_prefixes", {})
+    native_revision = profile.get("native_revision")
+    library_groups = profile.get("required_native_library_groups")
+    if not isinstance(native_revision, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", native_revision
+    ):
+        raise GuardError("component native revision is invalid")
+    if not isinstance(library_groups, dict):
+        raise GuardError("component native library requirements are invalid")
+    for candidate in wheels:
+        candidate_metadata = _wheel_metadata(candidate)
+        if candidate_metadata != metadata:
+            raise GuardError("native release wheels have mixed name or version metadata")
+        platform_tag = candidate.name[:-4].rsplit("-", 1)[-1]
+        if platform_tag in actual:
+            raise GuardError(f"duplicate native wheel platform: {platform_tag}")
+        actual.add(platform_tag)
+        expected_tag = f"py3-none-{platform_tag}"
+        if expected_tag not in _wheel_tags(candidate):
+            raise GuardError(
+                f"wheel filename platform and internal WHEEL tag differ: {candidate.name}"
+            )
+        groups = library_groups.get(platform_tag)
+        if not isinstance(groups, tuple) or not groups:
+            raise GuardError(f"native library requirements missing for {platform_tag}")
+        with zipfile.ZipFile(candidate) as archive:
+            members = set(archive.namelist())
+            selected: list[str] = []
+            for group in groups:
+                if not isinstance(group, tuple) or not all(
+                    isinstance(name, str) and name for name in group
+                ):
+                    raise GuardError("component native library requirements are invalid")
+                matches = [name for name in group if name in members]
+                if not matches:
+                    raise GuardError(
+                        f"wheel {candidate.name} lacks required native library: {group!r}"
+                    )
+                selected.append(matches[0])
+            if native_revision[:7].encode("ascii") not in archive.read(selected[0]):
+                raise GuardError(
+                    f"wheel {candidate.name} native library lacks pinned revision provenance"
+                )
+        for spec in specs:
+            package_dir = spec["package_dir"]
+            source_root = _repo_member(
+                repo, spec["source_package_dir"], f"source package {package_dir}"
+            )
+            source_files = _hash_tree(source_root, canonical_text=True)
+            wheel_files = _wheel_package_hashes(
+                candidate, package_dir, canonical_text=True
+            )
+            excluded = binary_prefixes.get(package_dir, ())
+            source_files = {
+                name: digest
+                for name, digest in source_files.items()
+                if not any(name.startswith(prefix) for prefix in excluded)
+            }
+            wheel_files = {
+                name: digest
+                for name, digest in wheel_files.items()
+                if not any(name.startswith(prefix) for prefix in excluded)
+            }
+            _assert_same_files(
+                source_files,
+                wheel_files,
+                f"source package {package_dir} and {candidate.name}",
+            )
+    if actual != set(required):
+        raise GuardError(
+            "native wheel platform set is not exact "
+            f"({sorted(actual)!r} != {sorted(required)!r})"
+        )
 
 
 def _manifest_specs(payload: dict[str, object]) -> list[dict[str, str]]:
@@ -1192,7 +1411,15 @@ def _verify_manifest_inputs(
                     "publication blocked: current live service differs from attested service"
                 )
             live_service_rechecked = True
-    _validate_package_artifacts(repo, wheel, sdist, specs, runtime_state)
+    _validate_package_artifacts(repo, wheel, sdist, specs, runtime_state, profile)
+    _validate_platform_wheels(
+        profile,
+        metadata,
+        wheel,
+        [path.resolve() for path in args.artifact],
+        repo,
+        specs,
+    )
     return specs, runtime_state, live_runtime_rechecked, live_service_rechecked
 
 
@@ -1373,7 +1600,15 @@ def command_attest(args: argparse.Namespace) -> dict[str, object]:
             "runtime distribution version does not match wheel version "
             f"{metadata['version']!r}"
         )
-    _validate_package_artifacts(repo, wheel, sdist, specs, runtime_state)
+    _validate_package_artifacts(repo, wheel, sdist, specs, runtime_state, profile)
+    _validate_platform_wheels(
+        profile,
+        metadata,
+        wheel,
+        [path.resolve() for path in args.artifact],
+        repo,
+        specs,
+    )
     service_name = _service_name(profile, getattr(args, "service_name", ""))
     service_state = (
         _systemd_user_service_state(service_name, runtime_state)
@@ -1457,7 +1692,12 @@ def command_publish(args: argparse.Namespace) -> dict[str, object]:
     repo = args.repo.resolve()
     wheel = args.wheel.resolve()
     sdist = args.sdist.resolve()
-    artifacts = [wheel, sdist, *(path.resolve() for path in args.artifact)]
+    artifacts = _publication_artifacts(
+        profile,
+        wheel,
+        sdist,
+        [path.resolve() for path in args.artifact],
+    )
     metadata = _wheel_metadata(wheel)
     result["remote_refs"] = _assert_remote_release_refs(
         repo,
@@ -1487,6 +1727,19 @@ def command_publish(args: argparse.Namespace) -> dict[str, object]:
     result["repository"] = args.repository or "pypi"
     result["index_roundtrip"] = "exact"
     return result
+
+
+def _publication_artifacts(
+    profile: dict[str, object],
+    wheel: Path,
+    sdist: Path,
+    extra_artifacts: list[Path],
+) -> list[Path]:
+    return (
+        [wheel, sdist, *extra_artifacts]
+        if profile.get("publish_sdist", True)
+        else [wheel, *extra_artifacts]
+    )
 
 
 def _add_artifact_arguments(parser: argparse.ArgumentParser) -> None:

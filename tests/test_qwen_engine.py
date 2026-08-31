@@ -28,7 +28,7 @@ class FakeVoiceRef:
 
 class FakeLibrary:
     def version(self):
-        return "fake-native-abi4"
+        return "fake-native-abi5"
 
 
 class FakeBackend:
@@ -41,6 +41,7 @@ class FakeBackend:
         self.extract_calls = 0
         self.load_calls = 0
         self.stream_calls = []
+        self.validated_onset_profiles = []
         self.last_stream_profile = None
         self.stream_entered = threading.Event()
         self.cancel_observed = threading.Event()
@@ -90,6 +91,11 @@ class FakeBackend:
                 self.cancel_observed.set()
             with self._active_lock:
                 self.active_streams -= 1
+
+    def validate_onset_silence_profile(self, profile):
+        normalized = str(profile).strip().lower()
+        self.validated_onset_profiles.append(normalized)
+        return normalized
 
     def close(self):
         self.closed = True
@@ -184,7 +190,7 @@ def test_generated_voice_cache_is_atomic_and_content_versioned(tmp_path, monkeyp
     assert metadata["ref_text"] == "hello"
     assert metadata["model_id"] == qwen_module.DEFAULT_MODEL
     assert metadata["quant"] == "Q8_0"
-    assert metadata["native_abi"] == 4
+    assert metadata["native_abi"] == 5
     assert not list((tmp_path / "voice-cache").rglob("*.tmp"))
     assert not list((tmp_path / "voice-cache").rglob("*.lock"))
     first.shutdown()
@@ -315,6 +321,39 @@ def test_streams_24khz_pcm_and_selects_clone_mode(tmp_path, ref_text, expect_icl
         assert engine.last_synthesis_profile["callback_to_queue_ms"] >= 0
         assert engine.last_synthesis_profile["first_chunk_duration_ms"] == pytest.approx(5 / 24)
         assert engine.last_synthesis_profile["predicted_underruns"] == 0
+    finally:
+        engine.shutdown()
+
+
+def test_onset_profile_validates_and_applies_only_to_xvector(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        qwen_module,
+        "_load_reference_audio",
+        lambda _path: np.array([0.0, 0.1], dtype=np.float32),
+    )
+    backend = FakeBackend()
+    wav = _reference_file(tmp_path)
+    engine = _engine(
+        tmp_path,
+        backend,
+        voice=QwenVoice("xvec", ref_audio=wav),
+        onset_silence_profile="QWEN3_TTS_12HZ_0_6B_BASE_Q8_V1",
+        trim_silence=False,
+    )
+    try:
+        assert backend.validated_onset_profiles == [
+            "qwen3_tts_12hz_0_6b_base_q8_v1"
+        ]
+        assert engine.synthesize("hello") is True
+        assert backend.stream_calls[-1]["onset_silence_profile"] == (
+            "qwen3_tts_12hz_0_6b_base_q8_v1"
+        )
+
+        engine.set_voice(
+            QwenVoice("icl", ref_audio=wav, ref_text="reference transcript")
+        )
+        assert engine.synthesize("hello again") is True
+        assert backend.stream_calls[-1]["onset_silence_profile"] == "off"
     finally:
         engine.shutdown()
 
@@ -758,32 +797,33 @@ def test_public_exports_and_install_extra_are_declared():
     assert '"qwen": base_requirements + qwen_requirements' in setup_text
     assert '"qwen-server": base_requirements + qwen_common_requirements' in setup_text
     assert (
-        'realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "win32"'
+        'realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "win32"'
         in setup_text
     )
     assert (
-        'realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "linux"'
+        'realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "linux"'
         in setup_text
     )
     requirements_text = (Path(__file__).parents[1] / "requirements.txt").read_text(
         encoding="utf-8"
     )
     assert (
-        'realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "win32"'
+        'realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "win32"'
         in requirements_text
     )
     assert (
-        'realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "linux"'
+        'realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "linux"'
         in requirements_text
     )
     assert "uvicorn[standard]>=0.34,<1" in requirements_text
 
 
-def test_installed_native_binding_has_required_abi4_contract():
+def test_installed_native_binding_has_required_abi5_contract():
     qwentts_cpp = pytest.importorskip("qwentts_cpp")
-    assert qwentts_cpp.QT_ABI_VERSION == 4
+    assert qwentts_cpp.QT_ABI_VERSION == 5
     init_parameters = inspect.signature(qwentts_cpp.QwenTTS.from_pretrained).parameters
     assert {"max_batch", "codec_chunk_sec"} <= set(init_parameters)
     stream_parameters = inspect.signature(qwentts_cpp.QwenTTS.stream).parameters
     assert "cancel_event" in stream_parameters
+    assert "onset_silence_profile" in stream_parameters
     assert "codec_chunk_sec" not in stream_parameters

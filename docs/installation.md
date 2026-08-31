@@ -104,7 +104,7 @@ These extras are present in `setup.py`:
 | `alignment` | Torch/torchaudio MMS forced character alignment. |
 | `omniasr` | Experimental omniASR CTC alignment and Silero VAD dependencies. |
 | `piper` | Core RealtimeTTS dependencies; Piper binary/model assets remain external. |
-| `qwen` | Native in-process qwentts.cpp backend with PyAudio playback (`realtimetts-qwen-native==0.1.0` on supported Windows and Linux targets). |
+| `qwen` | Native in-process qwentts.cpp backend with PyAudio playback (`realtimetts-qwen-native==0.2.0` on supported Windows and Linux targets). |
 | `qwen-server` | OpenAI-compatible HTTP server for the native Qwen backend (same platform-specific native wheel pins, without PyAudio). |
 | `inflect`, `inflect-pytorch`, `inflect-onnx` | Inflect-Micro-v2 with PyAudio playback; choose both backends, PyTorch only, or ONNX only. |
 | `jp`, `zh`, `ko` | Extra language support packages for Kokoro. |
@@ -239,8 +239,8 @@ the published native dependency from PyPI:
 ```bash
 python -m venv .venv-release-check
 python -m pip install --only-binary=:all: \
-  "realtimetts-qwen-native[cuda12]==0.1.0"
-python -m pip install "dist/realtimetts-0.8.0-py3-none-any.whl[qwen-server]"
+  "realtimetts-qwen-native[cuda12]==0.2.0"
+python -m pip install "dist/realtimetts-0.8.4-py3-none-any.whl[qwen-server]"
 python -m qwentts_cpp doctor
 python -m pip check
 ```

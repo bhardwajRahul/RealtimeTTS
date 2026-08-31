@@ -2051,6 +2051,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument(
+        "--onset-silence-profile",
+        default="off",
+        help=(
+            "Checkpoint-specific x-vector onset suppression profile "
+            "(default: off; ICL routes remain unchanged)"
+        ),
+    )
+    parser.add_argument(
         "--fragment-lookahead-words",
         type=int,
         default=0,
@@ -2327,6 +2335,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         trim_fade_in_ms=args.trim_fade_in_ms,
         fragment_fade_out_after_ms=args.fragment_fade_out_after_ms,
         startup_buffer_ms=args.startup_buffer_ms,
+        onset_silence_profile=args.onset_silence_profile,
         warmup=False,
         warmup_text=args.startup_warmup_text,
         warmup_tokens=args.startup_warmup_tokens,

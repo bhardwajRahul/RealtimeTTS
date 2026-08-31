@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.4 - 2026-08-31
+
+### Added
+
+- Add an opt-in, checkpoint-validated Qwen3-TTS x-vector onset profile that
+  prevents known silent c0 tokens from being generated during the first three
+  codec frames. It remains disabled by default and never applies to ICL voices.
+
+### Changed
+
+- Require `realtimetts-qwen-native==0.2.0` and qwentts.cpp ABI 5 for the
+  request-local onset profile contract.
+
 ## 0.8.3 - 2026-08-30
 
 ### Fixed

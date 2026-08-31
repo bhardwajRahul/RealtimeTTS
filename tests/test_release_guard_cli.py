@@ -58,6 +58,9 @@ def _artifacts(tmp_path: Path) -> tuple[Path, Path]:
     source_root = tmp_path / "sdist" / "guard_dist-1.0" / "GuardPkg"
     source_root.mkdir(parents=True)
     (source_root / "__init__.py").write_bytes(b"VALUE = 1\r\n")
+    (source_root.parent / "PKG-INFO").write_text(
+        "Name: guard-dist\nVersion: 1.0\n", encoding="utf-8"
+    )
     with tarfile.open(sdist, "w:gz") as archive:
         archive.add(source_root.parent, arcname="guard_dist-1.0")
     return wheel, sdist

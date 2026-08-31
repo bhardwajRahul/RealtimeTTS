@@ -123,8 +123,8 @@ typecast_requirements = [requirements.get("typecast-python", "typecast-python")]
 # the platform pins intentionally share one package name, so parse_requirements
 # would otherwise keep only the last variant.
 qwen_native_requirements = [
-    'realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "win32"',
-    'realtimetts-qwen-native[cuda12]==0.1.0; sys_platform == "linux"',
+    'realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "win32"',
+    'realtimetts-qwen-native[cuda12]==0.2.0; sys_platform == "linux"',
 ]
 qwen_common_requirements = qwen_native_requirements + [
     requirements.get("numpy", "numpy"),
