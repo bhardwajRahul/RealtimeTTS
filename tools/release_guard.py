@@ -67,6 +67,10 @@ COMPONENT_PROFILES: dict[str, dict[str, object]] = {
         # every wheel and the sdist; the deployed runtime must match the full
         # Linux x86-64 wheel, including its shared libraries.
         "binary_package_prefixes": {"qwentts_cpp": ("lib/",)},
+        # delvewheel rewrites these files while repairing Windows DLL loading.
+        "generated_wheel_files": {
+            "win_amd64": {"qwentts_cpp": ("__init__.py", "py.typed")},
+        },
         "required_wheel_platforms": (
             "manylinux_2_35_x86_64",
             "manylinux_2_35_aarch64",
@@ -1241,6 +1245,11 @@ def _validate_platform_wheels(
                 raise GuardError(
                     f"wheel {candidate.name} native library lacks pinned revision provenance"
                 )
+        generated_by_package = profile.get("generated_wheel_files", {}).get(
+            platform_tag, {}
+        )
+        if not isinstance(generated_by_package, dict):
+            raise GuardError("component generated wheel file exclusions are invalid")
         for spec in specs:
             package_dir = spec["package_dir"]
             source_root = _repo_member(
@@ -1251,15 +1260,22 @@ def _validate_platform_wheels(
                 candidate, package_dir, canonical_text=True
             )
             excluded = binary_prefixes.get(package_dir, ())
+            generated = generated_by_package.get(package_dir, ())
+            if not isinstance(generated, tuple) or not all(
+                isinstance(name, str) and name for name in generated
+            ):
+                raise GuardError("component generated wheel file exclusions are invalid")
             source_files = {
                 name: digest
                 for name, digest in source_files.items()
                 if not any(name.startswith(prefix) for prefix in excluded)
+                and name not in generated
             }
             wheel_files = {
                 name: digest
                 for name, digest in wheel_files.items()
                 if not any(name.startswith(prefix) for prefix in excluded)
+                and name not in generated
             }
             _assert_same_files(
                 source_files,
